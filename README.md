@@ -26,8 +26,12 @@ A plugin for Rich Whitehouse's Noesis to import and export RE Engine meshes, tex
 
 ## INSTALLATION:
 Download Noesis from here: https://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91
-Once it is installed, navigate to your [Noesis Installation Path]/plugins/python folder and place these 3 files in there (fmt_RE_MESH.py, gdeflate.py, GDeflateWrapper.dll) and re-launch the program.
+Once it is installed, navigate to your [Noesis Installation Path]/plugins/python folder and place these 3 files in there (`fmt_RE_MESH.py`, `gdeflate.py` and `GDeflateWrapper.dll`) and re-launch the program.
 Opening a mesh or tex file with Noesis will automatically load it, once the plugin is installed.
+
+### Notes
+- Newer RE Engine texture versions such as Monster Hunter Wilds / Monster Hunter Stories 3 / PRAGMATA use newer TEX payload layouts. `gdeflate.py` and `GDeflateWrapper.dll` must be present beside `fmt_RE_MESH.py` for these textures to decode correctly.
+- IMPORTANT: Meshes will load without textures unless merged. After extracting PRAGMATA game files, Merge `re_chunk_000` and `re_chunk_000.pak.sub_000` into a single base directory.
 
 
 ## NOESIS MAXSCRIPT:
