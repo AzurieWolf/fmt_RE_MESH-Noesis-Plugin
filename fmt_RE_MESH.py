@@ -1,7 +1,7 @@
 #RE Engine [PC] - ".mesh" plugin for Rich Whitehouse's Noesis
 #Authors: alphaZomega, AzurieWolf
 #Special thanks: Chrrox, SilverEzredes, Enaium 
-Version = "v3.32 (April 20, 2026)"
+Version = "v3.33 (April 20, 2026)"
 
 #Changelog:
 #- Addded support for Pragmata
@@ -809,14 +809,28 @@ def GetRootGameDir(path=""):
 			path = os.path.normpath(os.path.join(path, ".."))
 	
 	return path	+ "\\"
+
+def normalizeDirPath(pathIn, ensureTrailingSep=False):
+	if not pathIn:
+		return ""
+	path = str(pathIn).strip().strip("\"")
+	if not path:
+		return ""
+	path = os.path.normpath(path.replace("/", "\\"))
+	if ensureTrailingSep and not path.endswith("\\"):
+		path += "\\"
+	return path
+
+def getSavedExtractedDirPath(gameName):
+	return os.path.join(noesis.getPluginsPath(), "python", gameName + "NativesPath.txt")
 	
 def LoadExtractedDir(gameName=None):
 	gameName = gameName or sGameName
 	nativesPath = ""
+	savePath = getSavedExtractedDirPath(gameName)
 	try: 
-		with open(noesis.getPluginsPath() + '\python\\' + gameName + 'NativesPath.txt') as fin:
-			nativesPath = fin.read()
-			fin.close()
+		with open(savePath) as fin:
+			nativesPath = normalizeDirPath(fin.read(), ensureTrailingSep=True)
 	except IOError:
 		pass
 	if not os.path.isdir(nativesPath):
@@ -825,10 +839,12 @@ def LoadExtractedDir(gameName=None):
 		
 def SaveExtractedDir(dirIn, gameName=None):
 	gameName = gameName or sGameName
+	dirIn = normalizeDirPath(dirIn, ensureTrailingSep=True)
+	savePath = getSavedExtractedDirPath(gameName)
 	try: 
-		print (noesis.getPluginsPath() + 'python\\' + gameName + 'NativesPath.txt')
-		with open(noesis.getPluginsPath() + 'python\\' + gameName + 'NativesPath.txt', 'w') as fout:
-			print ("Writing string: " + dirIn + " to " + noesis.getPluginsPath() + 'python\\' + gameName + 'NativesPath.txt')
+		print (savePath)
+		with open(savePath, 'w') as fout:
+			print ("Writing string: " + dirIn + " to " + savePath)
 			fout.flush()
 			fout.write(str(dirIn))
 			fout.close()
@@ -838,10 +854,20 @@ def SaveExtractedDir(dirIn, gameName=None):
 	return 1
 	
 def findRootDir(path):
+	path = normalizeDirPath(path, ensureTrailingSep=True)
 	idx = path.find("\\natives\\")
 	if idx != -1:
 		return path[:(idx + 9)]
 	return path
+
+def resolveBaseDir(gameName=None, fallbackPath=""):
+	baseDir = LoadExtractedDir(gameName)
+	if baseDir and os.path.isdir(baseDir):
+		return normalizeDirPath(baseDir, ensureTrailingSep=True)
+	fallbackDir = findRootDir(fallbackPath) if fallbackPath else ""
+	if fallbackDir and os.path.isdir(fallbackDir):
+		return normalizeDirPath(fallbackDir, ensureTrailingSep=True)
+	return ""
 	
 def getGlobalMatrix(noebone, bonesList): #doesnt work 100%?
 	mat = noebone.getMatrix()
@@ -1619,7 +1645,7 @@ class openOptionsDialogImportWindow:
 		dialogOptions.currentDir = dialogOptions.currentDir or self.localDir
 		self.currentDir = dialogOptions.currentDir
 		self.localRoot = findRootDir(self.path)
-		self.baseDir = LoadExtractedDir(sGameName)
+		self.baseDir = resolveBaseDir(sGameName, self.path)
 		self.allFiles = []
 		self.pakFiles = []
 		self.subDirs = []
@@ -1758,7 +1784,7 @@ class openOptionsDialogImportWindow:
 			self.gameIdx = self.gameBox.getSelectionIndex()
 			restOfPath = dialogOptions.currentDir.replace(self.baseDir, "").replace(formats[sGameName]["nDir"]+"\\", "")
 			sGameName = gamesList[self.gameIdx]
-			self.baseDir = LoadExtractedDir(sGameName) #BaseDirectories[sGameName]
+			self.baseDir = resolveBaseDir(sGameName, self.path) #BaseDirectories[sGameName]
 			if self.localBox.getStringForIndex(self.localIdx) == "Base Directory":
 				dialogOptions.currentDir = self.baseDir
 				if restOfPath and os.path.isdir(self.baseDir + restOfPath):
@@ -1769,6 +1795,7 @@ class openOptionsDialogImportWindow:
 	def selectLocalBoxItem(self, noeWnd, controlId, wParam, lParam):
 		if self.localIdx != self.localBox.getSelectionIndex():
 			self.localIdx = self.localBox.getSelectionIndex()
+			self.baseDir = resolveBaseDir(sGameName, self.path)
 			restOfPath = dialogOptions.currentDir.replace(self.localRoot, "").replace(self.baseDir, "").replace(formats[sGameName]["nDir"]+"\\", "")
 			if self.localBox.getStringForIndex(self.localIdx) == "Base Directory":
 				if self.baseDir and os.path.isdir(self.baseDir):
