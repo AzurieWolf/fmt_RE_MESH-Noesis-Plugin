@@ -26,8 +26,8 @@ A plugin for Rich Whitehouse's Noesis to import and export RE Engine meshes, tex
 
 ## INSTALLATION:
 Download Noesis from here: https://www.richwhitehouse.com/index.php?content=inc_projects.php&showproject=91
-Once it is installed, navigate to your [Noesis Installation Path]/plugins/python folder and put fmt_RE_MESH.py in there, and re-launch the program.
-Opening a mesh or tex file with Noesis will automatically load it, once the plugin is installed. 
+Once it is installed, navigate to your [Noesis Installation Path]/plugins/python folder and place these 3 files in there (fmt_RE_MESH.py, gdeflate.py, GDeflateWrapper.dll) and re-launch the program.
+Opening a mesh or tex file with Noesis will automatically load it, once the plugin is installed.
 
 
 ## NOESIS MAXSCRIPT:
