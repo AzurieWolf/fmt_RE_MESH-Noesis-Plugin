@@ -1,7 +1,7 @@
 #RE Engine [PC] - ".mesh" plugin for Rich Whitehouse's Noesis
 #Authors: alphaZomega, AzurieWolf
 #Special thanks: Chrrox, SilverEzredes, Enaium 
-Version = "v3.33 (April 20, 2026)"
+Version = "v3.34 (April 20, 2026)"
 
 #Changelog:
 #- Addded support for Pragmata
@@ -337,6 +337,7 @@ openOptionsDialog = None
 autoLoadMotionsToolHandle = 0
 w1 = 127
 w2 = -128
+loadedTexSourcePaths = {}
 
 formats = {
 	"RE7":			{ "modelExt": ".-1", 		 "texExt": ".8", 		 "mmtrExt": ".69", 		   "nDir": "x64", "mdfExt": ".mdf2.6",  "meshVersion": 0, "mdfVersion": 0, "mlistExt": ".60", "meshMagic":352921600 },
@@ -1139,6 +1140,35 @@ def generateDummyTexture4px(rgbaColor, name="Dummy"):
 	imageData = rapi.imageDecodeRaw(imageData, 4, 4, "r8g8b8a8")
 	return NoeTexture(name, 4, 4, imageData, noesis.NOESISTEX_RGBA32)	
 
+def getTextureLookupKeys(pathOrName):
+	if not pathOrName:
+		return []
+	text = str(pathOrName).replace("/", "\\")
+	localName = rapi.getLocalFileName(text).lower()
+	keys = [localName]
+	baseName = localName
+	while True:
+		root, ext = os.path.splitext(baseName)
+		if not ext:
+			break
+		baseName = root.lower()
+		if baseName not in keys:
+			keys.append(baseName)
+	return keys
+
+def registerLoadedTextureSource(texName, textureFilePath):
+	global loadedTexSourcePaths
+	if not texName or not textureFilePath:
+		return
+	for key in getTextureLookupKeys(texName):
+		loadedTexSourcePaths[key] = textureFilePath
+
+def getLoadedTextureSource(outputName):
+	for key in getTextureLookupKeys(outputName):
+		if key in loadedTexSourcePaths and rapi.checkFileExists(loadedTexSourcePaths[key]):
+			return loadedTexSourcePaths[key]
+	return None
+
 def texLoadDDS(data, texList, texName=""):
 	texName = texName or rapi.getInputName()
 	bs = NoeBitStream(data)
@@ -1261,6 +1291,9 @@ def getNoesisDDSType(imgType):
 
 def findSourceTexFile(version_no, outputName=None):
 	newTexName = outputName or rapi.getOutputName().lower()
+	loadedSource = getLoadedTextureSource(newTexName)
+	if loadedSource:
+		return loadedSource, os.path.splitext(loadedSource)[1]
 	while newTexName.find("out.") != -1: 
 		newTexName = newTexName.replace("out.",".")
 	newTexName =  newTexName.replace(".dds","").replace(".tex","").replace(".jpg","").replace(".png","").replace(".tga","").replace(".gif","")
@@ -4165,6 +4198,7 @@ class meshFile(object):
 						numTex = len(self.texList)
 						noetex = texLoadDDS(textureData, self.texList, texName)
 						if noetex:
+							registerLoadedTextureSource(texName, textureFilePath)
 							if dialogOptions.doConvertTex:
 								if "isALBM"  == extraParam or "isALBD" == extraParam:
 									if "isALBD" == extraParam:
