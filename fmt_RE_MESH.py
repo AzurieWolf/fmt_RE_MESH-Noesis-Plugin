@@ -92,9 +92,16 @@ import os
 import re
 import time
 from collections import namedtuple
+from io import BytesIO
 
 import noewin
 from inc_noesis import *
+
+try:
+	from gdeflate import GDeflate, GDeflateError
+except:
+	GDeflate = None
+	GDeflateError = Exception
 
 
 def registerNoesisTypes():
@@ -629,6 +636,62 @@ fmtNameToBpp = {
     "BC4_SNORM": 4
 }
 
+GDEFLATE_TEX_VERSIONS = {241106027, 250813143, 251111100}
+gdeflateDecompressor = None
+
+def roundUpDiv(x, y):
+	return int((x + y - 1) / y)
+
+def getTexFormatLayout(fmtName):
+	if fmtName.find("BC1") != -1 or fmtName.find("BC4") != -1:
+		return 4, 4, 8
+	if fmtName.find("BC2") != -1 or fmtName.find("BC3") != -1 or fmtName.find("BC5") != -1 or fmtName.find("BC6") != -1 or fmtName.find("BC7") != -1:
+		return 4, 4, 16
+	bpp = fmtNameToBpp.get(fmtName, 0)
+	if bpp > 0:
+		return 1, 1, int((bpp + 7) / 8)
+	return None
+
+def getTexMipExpectedSize(mipWidth, mipHeight, fmtName, mipDepth=1):
+	layout = getTexFormatLayout(fmtName)
+	if not layout:
+		return 0, 0
+	blockWidth, blockHeight, unitBytes = layout
+	lineBytes = roundUpDiv(mipWidth, blockWidth) * unitBytes
+	fullSize = lineBytes * roundUpDiv(mipHeight, blockHeight) * max(mipDepth, 1)
+	return lineBytes, fullSize
+
+def trimTexMipScanlines(mipBytes, scanlineLength, lineBytes, storedSize):
+	if scanlineLength <= 0 or lineBytes <= 0 or scanlineLength == lineBytes:
+		return mipBytes
+	out = bytearray()
+	stream = BytesIO(mipBytes)
+	currentOffset = 0
+	seekAmount = scanlineLength - lineBytes
+	while currentOffset < storedSize:
+		out.extend(stream.read(lineBytes))
+		if seekAmount > 0:
+			stream.seek(seekAmount, 1)
+		currentOffset += scanlineLength
+	if currentOffset != storedSize:
+		print("Warning: unexpected mip padding size", currentOffset, storedSize)
+	return bytes(out)
+
+def maybeDecompressGDeflate(rawBytes):
+	global gdeflateDecompressor
+	if len(rawBytes) < 2 or rawBytes[0] != 0x04 or rawBytes[1] != 0xFB:
+		return rawBytes
+	if GDeflate is None:
+		print("Fatal Error: GDeflate support is not available for this TEX file.")
+		return None
+	try:
+		if gdeflateDecompressor is None:
+			gdeflateDecompressor = GDeflate()
+		return gdeflateDecompressor.decompress(rawBytes, num_workers=4)
+	except Exception as err:
+		print("Fatal Error: Failed to decompress GDeflate texture data:", err)
+		return None
+
 def sort_human(List):
 	convert = lambda text: float(text) if text.isdigit() else text
 	return sorted(List, key=lambda mesh: [convert(c) for c in re.split('([-+]?[0-9]*\.?[0-9]*)', mesh.name)])
@@ -1025,9 +1088,10 @@ def texLoadDDS(data, texList, texName=""):
 	bs = NoeBitStream(data)
 	magic = bs.readUInt()
 	version = bs.readUInt()
+	texVersion = convertTexVersion(version)
 	width = bs.readUShort()
 	height = bs.readUShort()
-	unk00 = bs.readUShort()
+	depth = bs.readUShort()
 	if version == 190820018:
 		version = 10
 	if version == 143221013:
@@ -1059,8 +1123,23 @@ def texLoadDDS(data, texList, texName=""):
 	
 	formatName = texFormatNames[format]
 	bpp = fmtNameToBpp[formatName]
-	width = int((mipDataImg[0][1] / bpp) * 2)
+	widthFromPitch = int((mipDataImg[0][1] / bpp) * 2)
+	if width <= 0:
+		width = widthFromPitch
+	elif width != widthFromPitch and texVersion >= 251111100:
+		# Newer TEX variants can store aligned row pitch, which scrambles the image
+		# if we treat pitch as the real width.
+		print("Using header width", width, "instead of aligned pitch width", widthFromPitch)
 	print(formatName, bpp)
+
+	compressedMipHeaders = []
+	if texVersion in GDEFLATE_TEX_VERSIONS:
+		for i in range(numImages):
+			compressedMipHeadersImg = []
+			for j in range(mipCount):
+				compressedMipHeadersImg.append([bs.readUInt(), bs.readUInt()]) #[0] compressed size, [1] relative data offset
+			compressedMipHeaders.append(compressedMipHeadersImg)
+	imageDataBaseOffset = bs.tell()
 	
 	texFormat = noesis.NOESISTEX_RGBA32
 	tex = False
@@ -1071,8 +1150,15 @@ def texLoadDDS(data, texList, texName=""):
 		
 		for j in range(mipCount):
 			try:
-				bs.seek(mipData[i][j][0])
-				texData = bs.readBytes(mipData[i][j][2])
+				if texVersion in GDEFLATE_TEX_VERSIONS:
+					bs.seek(imageDataBaseOffset + compressedMipHeaders[i][j][1])
+					texData = bs.readBytes(compressedMipHeaders[i][j][0])
+					texData = maybeDecompressGDeflate(texData)
+					if texData == None:
+						return 0
+				else:
+					bs.seek(mipData[i][j][0])
+					texData = bs.readBytes(mipData[i][j][2])
 			except:
 				if i > 0:
 					numImages = i - 1
@@ -1080,6 +1166,10 @@ def texLoadDDS(data, texList, texName=""):
 					break
 				else:
 					return 0
+			lineBytes, expectedSize = getTexMipExpectedSize(mipWidth, mipHeight, formatName, max(int(depth), 1))
+			storedSize = len(texData)
+			if expectedSize and (mipData[i][j][1] != lineBytes or storedSize != expectedSize):
+				texData = trimTexMipScanlines(texData, mipData[i][j][1], lineBytes, storedSize)
 			try:
 				texData, fmtName = readTextureData(texData, mipWidth, mipHeight, format)
 			except:
