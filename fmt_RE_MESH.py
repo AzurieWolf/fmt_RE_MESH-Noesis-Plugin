@@ -1,12 +1,14 @@
 #RE Engine [PC] - ".mesh" plugin for Rich Whitehouse's Noesis
-#Authors: alphaZomega, Gh0stblade 
+#Authors: alphaZomega, AzurieWolf
 #Special thanks: Chrrox, SilverEzredes, Enaium 
-Version = "v3.28 (September 21, 2024)"
+Version = "v3.30 (April 20, 2026)"
 
 #Changelog:
-#- Fixed motlist.854 reading
-
-
+#- Addded support for Pragmata
+#- Added RE9 model and animation support
+#- Fixed MHWilds/MHS3/Pragmata mesh header layout (Onimusha layout, meshVersion 4)
+#- Fixed MHWilds packed 6-index bone weights (same as SF6)
+#- Fixed motlist version threshold for RE9 uknOffset (>= 1047)
 
 #Options: These are global options that change or enable/disable certain features
 
@@ -25,10 +27,12 @@ bSF6Export					= True					#Enable or disable export of mesh.230110883 from the e
 bRE4Export					= True					#Enable or disable export of mesh.221108797 from the export list (and tex.143221013)
 bExoExport					= True					#Enable or disable export of mesh.220907984 from the export list (and tex.40)
 bApolloExport				= True					#Enable or disable export of mesh.230612127 from the export list (and tex.719230324)
-bDD2Export					= True					#Enable or disable export of mesh.231011879 from the export list (and tex.760230703)
+bDD2Export					= True					#Enable or disable export of mesh.240423143 from the export list (and tex.760230703)
 bDRDRExport					= True					#Enable or disable export of mesh.240424828 from the export list (and tex.240606151)
-
-
+bMHWsExport					= True					#Enable or disable export of mesh.241111606 from the export list (and tex.241106027)
+bMHS3Export					= True					#Enable or disable export of mesh.250604100 from the export list (and tex.251111100)
+bRE9Export					= True					#Enable or disable export of RE9 mesh.250925211 from the export list (and tex.250813143)
+bPragmataExport				= True					#Enable or disable export of mesh.250925211 from the export list (and tex.250813143)
 
 #Mesh Global
 fDefaultMeshScale 			= 100.0 				#Override mesh scale (default is 1.0)
@@ -59,6 +63,7 @@ bImportMips 				= False					#Imports texture mip maps as separate images
 texOutputExt				= ".tga"				#File format used when linking FBX materials to images
 doConvertMatsForBlender		= False					#Load alpha maps as reflection maps, metallic maps as specular maps and roughness maps as bump maps for use with modified Blender FBX importer
 bNoImportMenu				= False					#Hide the import menu on loading a mesh
+bAutoLoadMotions			= False					#Automatically load all motion clips without showing the motlist selection dialog
 
 #Export Options
 bNewExportMenu				= False					#Show a custom Noesis window on mesh export
@@ -75,21 +80,25 @@ bForceRootBoneToBone0		= True					#If the root bone is detected as the last bone
 bAddBoneNumbers 			= 2						#Adds bone numbers and colons before bone names to indicate if they are active. 0 = Off, 1 = On, 2 = Auto
 bRotateBonesUpright			= False					#Rotates bones to be upright for editing and then back to normal for exporting
 bReadGroupIds				= True					#Import/Export with the GroupID as the MainMesh number
+bShowMotionIds = False
 
 #Plugin GUI
 iListboxSize  				= 280					#The height of the list box in the plugin's import menu
 
 
-from inc_noesis import *
-from collections import namedtuple
-import noewin
+import copy
 import math
 import os
 import re
-import copy
 import time
+from collections import namedtuple
+
+import noewin
+from inc_noesis import *
+
 
 def registerNoesisTypes():
+	global autoLoadMotionsToolHandle
 
 	def addOptions(handle):
 		noesis.setTypeExportOptions(handle, "-noanims -notex")
@@ -103,13 +112,13 @@ def registerNoesisTypes():
 		noesis.addOption(handle, "-vfx", "Export as VFX mesh", 0)
 		return handle
 		
-	handle = noesis.register("RE Engine MESH [PC]", ".1902042334;.1808312334;.1808282334;.2008058288;.2102020001;.2101050001;.2109108288;.2109148288;.220128762;.220301866;.220721329;.221108797;.220907984;.230110883;.230612127;.231011879;.240424828;.NewMesh")
+	handle = noesis.register("RE Engine MESH [PC]", ".1902042334;.1808312334;.1808282334;.2008058288;.2102020001;.2101050001;.2109108288;.2109148288;.220128762;.220301866;.220721329;.221108797;.220907984;.230110883;.230612127;.240423143;.231011879;.240424828;.241111606;.240820143;.250604100;.250925211;.251121828;.250707828;.NewMesh")
 	noesis.setHandlerTypeCheck(handle, meshCheckType)
 	noesis.setHandlerLoadModel(handle, meshLoadModel)
 	noesis.addOption(handle, "-noprompt", "Do not prompt for MDF file", 0)
 	noesis.setTypeSharedModelFlags(handle, (noesis.NMSHAREDFL_WANTGLOBALARRAY))
 
-	handle = noesis.register("RE Engine Texture [PC]", ".10;.190820018;.11;.8;.28;.stm;.30;.31;.34;.35;.36;.40;.143221013;.143230113;.719230324;.760230703;.240606151")
+	handle = noesis.register("RE Engine Texture [PC]", ".10;.190820018;.11;.8;.28;.stm;.30;.31;.34;.35;.36;.40;.143221013;.143230113;.719230324;.760230703;.240606151;.241106027;.251111100;.250813143;.251111100")
 	noesis.setHandlerTypeCheck(handle, texCheckType)
 	noesis.setHandlerLoadRGBA(handle, texLoadDDS)
 
@@ -121,9 +130,10 @@ def registerNoesisTypes():
 	noesis.setHandlerTypeCheck(handle, SCNCheckType)
 	noesis.setHandlerLoadModel(handle, SCNLoadModel)
 	
-	handle = noesis.register("RE Engine MOTLIST [PC]", ".60;.85;.99;.484;.486;.500;.524;.528;.643;.653;.663;.750;.751;.851;.854")
+	handle = noesis.register("RE Engine MOTLIST [PC]", ".60;.85;.99;.484;.486;.500;.524;.528;.643;.653;.663;.750;.751;.851;.854;.992;.1004;.1047;.1057")
 	noesis.setHandlerTypeCheck(handle, motlistCheckType)
 	noesis.setHandlerLoadModel(handle, motlistLoadModel)
+	noesis.addOption(handle, "-noprompt", "Automatically load all motion clips", 0)
 
 	if bRE2Export:
 		handle = noesis.register("RE2 Remake Texture [PC]", ".10")
@@ -249,7 +259,7 @@ def registerNoesisTypes():
 		handle = noesis.register("Dragon's Dogma 2 Texture [PC]", ".760230703")
 		noesis.setHandlerTypeCheck(handle, texCheckType)
 		noesis.setHandlerWriteRGBA(handle, texWriteRGBA);
-		handle = noesis.register("Dragon's Dogma 2 Mesh", (".231011879"))
+		handle = noesis.register("Dragon's Dogma 2 Mesh", (".240423143"))
 		noesis.setHandlerTypeCheck(handle, meshCheckType)
 		noesis.setHandlerWriteModel(handle, meshWriteModel)
 		addOptions(handle)
@@ -262,10 +272,52 @@ def registerNoesisTypes():
 		#noesis.setHandlerTypeCheck(handle, meshCheckType)
 		#noesis.setHandlerWriteModel(handle, meshWriteModel)
 		#addOptions(handle)
+
+	if bMHWsExport:
+		handle = noesis.register("MHWs Texture [PC]", ".241106027")
+		noesis.setHandlerTypeCheck(handle, texCheckType)
+		noesis.setHandlerWriteRGBA(handle, texWriteRGBA)
+		handle = noesis.register("MHWs Mesh", (".241111606"))
+		noesis.setHandlerTypeCheck(handle, meshCheckType)
+		noesis.setHandlerWriteModel(handle, meshWriteModel)
+		addOptions(handle)
 		
+	if bMHS3Export:
+		handle = noesis.register("Monster Hunter Stories 3 Texture [PC]", ".251111100")
+		noesis.setHandlerTypeCheck(handle, texCheckType)
+		noesis.setHandlerWriteRGBA(handle, texWriteRGBA)
+		handle = noesis.register("Monster Hunter Stories 3 Mesh", (".250604100"))
+		noesis.setHandlerTypeCheck(handle, meshCheckType)
+		noesis.setHandlerWriteModel(handle, meshWriteModel)
+		addOptions(handle)
+
+	if bRE9Export:
+		handle = noesis.register("RE9 Mesh", (".250925211"))
+		noesis.setHandlerTypeCheck(handle, meshCheckType)
+		noesis.setHandlerWriteModel(handle, meshWriteModel)
+		addOptions(handle)
+
+	if bPragmataExport:
+		handle = noesis.register("Pragmata Texture [PC]", ".251111100")
+		noesis.setHandlerTypeCheck(handle, texCheckType)
+		noesis.setHandlerWriteRGBA(handle, texWriteRGBA)
+		handle = noesis.register("Pragmata Mesh", (".250707828"))
+		noesis.setHandlerTypeCheck(handle, meshCheckType)
+		noesis.setHandlerWriteModel(handle, meshWriteModel)
+		addOptions(handle)
 		
+	autoLoadMotionsToolHandle = noesis.registerTool("Auto Load All Motions", toggleAutoLoadMotions, "Toggle auto-loading all motion clips without showing the selection dialog")
+	noesis.setToolSubMenuName(autoLoadMotionsToolHandle, "RE Engine")
+	noesis.checkToolMenuItem(autoLoadMotionsToolHandle, 1 if bAutoLoadMotions else 0)
+
 	noesis.logPopup()
 	return 1
+
+def toggleAutoLoadMotions(toolIndex):
+	global autoLoadMotionsToolHandle, bAutoLoadMotions
+	bAutoLoadMotions = not bAutoLoadMotions
+	noesis.checkToolMenuItem(autoLoadMotionsToolHandle, 1 if bAutoLoadMotions else 0)
+	return 0
 		
 #Default global variables for internal use:
 sGameName = "RE2"
@@ -275,6 +327,7 @@ bWriteBones = False
 bDoVFX = False
 bReWrite = False
 openOptionsDialog = None
+autoLoadMotionsToolHandle = 0
 w1 = 127
 w2 = -128
 
@@ -288,13 +341,17 @@ formats = {
 	"MHRSunbreak":	{ "modelExt": ".2109148288", "texExt": ".28", 		 "mmtrExt": ".220427553",  "nDir": "stm", "mdfExt": ".mdf2.23", "meshVersion": 2, "mdfVersion": 3, "mlistExt": ".528", "meshMagic":21091000, "motionIDsData":[72,8] },
 	"ReVerse":		{ "modelExt": ".2102020001", "texExt": ".31", 		 "mmtrExt": ".2108110001", "nDir": "stm", "mdfExt": ".mdf2.20", "meshVersion": 2, "mdfVersion": 3, "mlistExt": ".500", "meshMagic":2020091500, "motionIDsData":[24,8] },
 	"RERT": 		{ "modelExt": ".2109108288", "texExt": ".34", 		 "mmtrExt": ".2109101635", "nDir": "stm", "mdfExt": ".mdf2.21", "meshVersion": 2, "mdfVersion": 3, "mlistExt": ".524", "meshMagic":21041600, "motionIDsData":[72,8] },
-	"RE7RT": 		{ "modelExt": ".220128762",  "texExt": ".35", 		 "mmtrExt": ".2109101635", "nDir": "stm", "mdfExt": ".mdf2.21", "meshVersion": 2, "mdfVersion": 3, "mlistExt": ".524", "meshMagic":21041600, "motionIDsData":[72,8] },
+	"RE7RT": 		{ "modelExt": ".220128762",  "texExt": ".35", 		 "mmtrExt": ".220128762",  "nDir": "stm", "mdfExt": ".mdf2.21", "meshVersion": 2, "mdfVersion": 3, "mlistExt": ".524", "meshMagic":21041600, "motionIDsData":[72,8] },
 	"SF6": 			{ "modelExt": ".230110883",  "texExt": ".143230113", "mmtrExt": ".221102761",  "nDir": "stm", "mdfExt": ".mdf2.31", "meshVersion": 3, "mdfVersion": 4, "mlistExt": ".653", "meshMagic":230403828, "motionIDsData":[72,8] },
 	"ExoPrimal": 	{ "modelExt": ".220907984",  "texExt": ".40", 		 "mmtrExt": ".221007878",  "nDir": "stm", "mdfExt": ".mdf2.31", "meshVersion": 3, "mdfVersion": 4, "mlistExt": ".643", "meshMagic":220705151, "motionIDsData":[72,8] },
 	"RE4": 			{ "modelExt": ".221108797",  "texExt": ".143221013", "mmtrExt": ".221007879",  "nDir": "stm", "mdfExt": ".mdf2.32", "meshVersion": 3, "mdfVersion": 4, "mlistExt": ".663", "meshMagic":220822879, "motionIDsData":[72,8] },
 	"AJ_AAT": 		{ "modelExt": ".230612127",  "texExt": ".719230324", "mmtrExt": ".230815080",  "nDir": "stm", "mdfExt": ".mdf2.37", "meshVersion": 3, "mdfVersion": 4, "mlistExt": ".750", "meshMagic":230406984, "motionIDsData":[72,8] },
-	"DD2": 			{ "modelExt": ".231011879",  "texExt": ".760230703", "mmtrExt": ".230815080",  "nDir": "stm", "mdfExt": ".mdf2.40", "meshVersion": 3, "mdfVersion": 4, "mlistExt": ".751", "meshMagic":230517984, "motionIDsData":[72,8] },
+	"DD2": 			{ "modelExt": ".240423143",  "texExt": ".760230703", "mmtrExt": ".240112003",  "nDir": "stm", "mdfExt": ".mdf2.40", "meshVersion": 3, "mdfVersion": 4, "mlistExt": ".751", "meshMagic":230517984, "motionIDsData":[72,8] },
 	"DRDR": 		{ "modelExt": ".240424828",  "texExt": ".240606151", "mmtrExt": ".240405143",  "nDir": "stm", "mdfExt": ".mdf2.40", "meshVersion": 3, "mdfVersion": 4, "mlistExt": ".854", "meshMagic":240423829, "motionIDsData":[72,8] },
+	"MHWs": 		{"modelExt": ".241111606",  "texExt": ".241106027", "mmtrExt": ".250206176",  "nDir": "stm", "mdfExt": ".mdf2.45", "meshVersion": 4, "mdfVersion": 4, "mlistExt": ".992", "meshMagic": 240704828, "motionIDsData": [72, 8]},
+	"MHS3": 		{"modelExt": ".250604100",  "texExt": ".251111100", "mmtrExt": ".250905804",  "nDir": "stm", "mdfExt": ".mdf2.49", "meshVersion": 4, "mdfVersion": 4, "mlistExt": ".1004", "meshMagic": 250203152, "motionIDsData": [72, 8]},
+	"RE9": 			{"modelExt": ".250925211",  "texExt": ".250813143", "mmtrExt": ".251112994",  "nDir": "stm", "mdfExt": ".mdf2.51", "meshVersion": 4, "mdfVersion": 4, "mlistExt": ".1047", "meshMagic": 250904410, "motionIDsData": [72, 8]},
+	"Pragmata": 	{"modelExt": ".250707828",  "texExt": ".251111100", "mmtrExt": ".251112995",  "nDir": "STM", "mdfExt": ".mdf2.51", "meshVersion": 4, "mdfVersion": 4, "mlistExt": ".1057", "meshMagic": 250707828, "motionIDsData": [72, 8]},
 }
 
 extToFormat = { #incomplete, just testing
@@ -1393,7 +1450,7 @@ dialogOptions = DialogOptions()
 
 DoubleClickTimer = namedtuple("DoubleClickTimer", "name idx timer")
 
-gamesList = [ "RE7", "RE7RT", "RE2", "RERT", "RE3", "RE4", "RE8", "MHRSunbreak", "DMC5", "SF6", "ReVerse", "ExoPrimal", "AJ_AAT", "DD2", "DRDR" ]
+gamesList = [ "RE7", "RE7RT", "RE2", "RERT", "RE3", "RE4", "RE8", "MHRSunbreak", "DMC5", "SF6", "ReVerse", "ExoPrimal", "AJ_AAT", "DD2", "DRDR", "MHWs", "MHS3", "RE9", "Pragmata" ]
 fullGameNames = [
 	"Resident Evil 7",
 	"Resident Evil 7 RT",
@@ -1410,6 +1467,10 @@ fullGameNames = [
 	"Apollo Justice AAT",
 	"Dragon's Dogma 2",
 	"Dead Rising DR",
+	"Monster Hunter Wilds",
+	"Monster Hunter Stories 3",
+	"Resident Evil 9",
+	"Pragmata",
 ]
 		
 class openOptionsDialogImportWindow:
@@ -2153,7 +2214,7 @@ def SCNLoadModel(data, mdlList):
 	fName = rapi.getInputName().upper()
 	guessedName = "RE8" if "RE8" in fName else "RE7" if "RE7" in fName else "RE2" if "RE2" in fName else "RE3" if "RE3" in fName else "RE7" if "RE7" in fName \
 	else "SF6" if "SF6" in fName else "MHRise" if "MHRISE" in fName else "RE4" if "RE4" in fName else "ExoPrimal" if ("EXO" in fName or "EXP" in fName) else "DMC5" if "DMC5" in fName \
-	else "DD2" if "DD2" in fName else "DRDR" if "DRDR" in fName else "AJ_AAT"
+	else "DD2" if "DD2" in fName else "DRDR" if "DRDR" in fName else "MHWs" if "MHWs" in fName else "MHS3" if "MHS3" in fName else "Pragmata" if "PRAG" in fName else "AJ_AAT"
 	guessedName = guessedName + "RT" if (guessedName + "RT") in fName else guessedName
 	
 	msg = ''.join([name + ", " for name, formatList in formats.items()])
@@ -2444,9 +2505,23 @@ def readPackedBitsVec3(packedInt, numBits):
 	y = ((packedInt >> (numBits*1)) & limit) / limit
 	z = ((packedInt >> (numBits*2)) & limit) / limit
 	return NoeVec3((x, y, z))
-	
+
 def convertBits(packedInt, numBits):
-	return packedInt / (2**numBits-1)	
+	return packedInt / (2**numBits-1)
+
+def readBytesAsBigEndian(bs, numBytes):
+	"""Read specified number of bytes and assemble as big-endian uint64"""
+	val = 0
+	for j in range(numBytes):
+		val = (val << 8) | bs.readUByte()
+	return val
+
+def readBytesAsBigEndian32(bs, numBytes):
+	"""Read specified number of bytes and assemble as big-endian uint32"""
+	val = 0
+	for j in range(numBytes):
+		val = (val << 8) | bs.readUByte()
+	return val
 
 def skipToNextLine(bs):
 	bs.seek(bs.tell() + 16 - (bs.tell() % 16))
@@ -2521,98 +2596,371 @@ class motFile:
 		compression = flags & 0xFF000
 		if ftype=="pos" or ftype=="scl":
 			defScaleVec = NoeVec3((fDefaultMeshScale, fDefaultMeshScale, fDefaultMeshScale))
+			# 0x00000 - LoadVector3sFull
 			if compression == 0x00000:
 				output = NoeVec3((bs.readFloat(), bs.readFloat(), bs.readFloat())) * defScaleVec
+			# 0x20000 - LoadVector3s5BitA (RE2) / LoadVector3s5BitB (RE3+)
 			elif compression == 0x20000:
 				rawVec = readPackedBitsVec3(bs.readUShort(), 5)
 				if self.version <= 65:
-					output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.z, unpacks.max.y * rawVec[2] + unpacks.min.z)) * defScaleVec
+					output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)) * defScaleVec
 				else:
 					output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.max.w, unpacks.max.y * rawVec[1] + unpacks.min.x, unpacks.max.z * rawVec[2] + unpacks.min.y)) * defScaleVec
+			# 0x21000 - LoadVector3sXAxis16Bit
+			elif compression == 0x21000:
+				data = bs.readUShort()
+				x = unpacks.max.x * (data / 0xFFFF) + unpacks.max.y
+				y = unpacks.max.z
+				z = unpacks.max.w
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x22000 - LoadVector3sYAxis16Bit
+			elif compression == 0x22000:
+				data = bs.readUShort()
+				x = unpacks.max.y
+				y = unpacks.max.x * (data / 0xFFFF) + unpacks.max.z
+				z = unpacks.max.w
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x23000 - LoadVector3sZAxis16Bit
+			elif compression == 0x23000:
+				data = bs.readUShort()
+				x = unpacks.max.y
+				y = unpacks.max.z
+				z = unpacks.max.x * (data / 0xFFFF) + unpacks.max.w
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x24000 - LoadVector3sXYZAxis16Bit
 			elif compression == 0x24000:
-				x = y = z = unpacks.max.x * convertBits(bs.readUShort(), 16) + unpacks.min.x
+				data = bs.readUShort()
+				x = y = z = unpacks.max.x * (data / 0xFFFF) + unpacks.max.w
 				output = NoeVec3((x, y, z)) * defScaleVec
-			elif compression == 0x44000:
-				x = y = z = unpacks.max.x * bs.readFloat() + unpacks.min.x
+			# 0x25000 - LoadVector3sXYAxis8Bit
+			elif compression == 0x25000:
+				x = unpacks.max.x * (bs.readUByte() / 0xFF) + unpacks.max.z
+				y = unpacks.max.y * (bs.readUByte() / 0xFF) + unpacks.max.w
+				z = unpacks.min.x
 				output = NoeVec3((x, y, z)) * defScaleVec
-			elif compression == 0x40000 or (compression == 0x30000 and self.version <= 65):
+			# 0x26000 - LoadVector3sXZAxis8Bit
+			elif compression == 0x26000:
+				x = unpacks.max.x * (bs.readUByte() / 0xFF) + unpacks.max.z
+				y = unpacks.max.w
+				z = unpacks.max.y * (bs.readUByte() / 0xFF) + unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x27000 - LoadVector3sYZAxis8Bit
+			elif compression == 0x27000:
+				x = unpacks.max.z
+				y = unpacks.max.x * (bs.readUByte() / 0xFF) + unpacks.max.w
+				z = unpacks.max.y * (bs.readUByte() / 0xFF) + unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x30000 - LoadVector3s10BitA (RE2) / LoadVector3s8BitB (RE3+)
+			elif compression == 0x30000:
+				if self.version <= 65:
+					rawVec = readPackedBitsVec3(bs.readUInt(), 10)
+					output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)) * defScaleVec
+				else:
+					# LoadVector3s8BitB - 3 bytes
+					b0 = bs.readUByte()
+					b1 = bs.readUByte()
+					b2 = bs.readUByte()
+					x = unpacks.max.x * (b0 / 0xFF) + unpacks.max.w
+					y = unpacks.max.y * (b1 / 0xFF) + unpacks.min.x
+					z = unpacks.max.z * (b2 / 0xFF) + unpacks.min.y
+					output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x31000 - LoadVector3sXAxis (RE2) / LoadVector3sXAxis24Bit (RE3+)
+			elif compression == 0x31000:
+				if self.version <= 65:
+					output = NoeVec3((bs.readFloat(), unpacks.max.y, unpacks.max.z)) * defScaleVec
+				else:
+					data = readBytesAsBigEndian32(bs, 3)
+					x = unpacks.max.x * (data / 0xFFFFFF) + unpacks.max.y
+					y = unpacks.max.z
+					z = unpacks.max.w
+					output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x32000 - LoadVector3sYAxis (RE2) / LoadVector3sYAxis24Bit (RE3+)
+			elif compression == 0x32000:
+				if self.version <= 65:
+					output = NoeVec3((unpacks.max.x, bs.readFloat(), unpacks.max.z)) * defScaleVec
+				else:
+					data = readBytesAsBigEndian32(bs, 3)
+					x = unpacks.max.y
+					y = unpacks.max.x * (data / 0xFFFFFF) + unpacks.max.z
+					z = unpacks.max.w
+					output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x33000 - LoadVector3sZAxis (RE2) / LoadVector3sZAxis24Bit (RE3+)
+			elif compression == 0x33000:
+				if self.version <= 65:
+					output = NoeVec3((unpacks.max.x, unpacks.max.y, bs.readFloat())) * defScaleVec
+				else:
+					data = readBytesAsBigEndian32(bs, 3)
+					x = unpacks.max.y
+					y = unpacks.max.z
+					z = unpacks.max.x * (data / 0xFFFFFF) + unpacks.max.w
+					output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x35000 - LoadVector3sYZAxis12Bit
+			elif compression == 0x35000:
+				val = readBytesAsBigEndian32(bs, 3)
+				x = unpacks.max.z
+				y = unpacks.max.x * ((val >> 0) & 0xFFF) / 0xFFF + unpacks.max.w
+				z = unpacks.max.y * ((val >> 12) & 0xFFF) / 0xFFF + unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x36000 - LoadVector3sXZAxis12Bit
+			elif compression == 0x36000:
+				val = readBytesAsBigEndian32(bs, 3)
+				x = unpacks.max.x * ((val >> 0) & 0xFFF) / 0xFFF + unpacks.max.z
+				y = unpacks.max.w
+				z = unpacks.max.y * ((val >> 12) & 0xFFF) / 0xFFF + unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x37000 - LoadVector3sXYAxis12Bit
+			elif compression == 0x37000:
+				val = readBytesAsBigEndian32(bs, 3)
+				x = unpacks.max.x * ((val >> 0) & 0xFFF) / 0xFFF + unpacks.max.z
+				y = unpacks.max.y * ((val >> 12) & 0xFFF) / 0xFFF + unpacks.max.w
+				z = unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x40000 - LoadVector3s10BitB
+			elif compression == 0x40000:
 				rawVec = readPackedBitsVec3(bs.readUInt(), 10)
 				if self.version <= 65:
 					output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)) * defScaleVec
 				else:
 					output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.max.w, unpacks.max.y * rawVec[1] + unpacks.min.x, unpacks.max.z * rawVec[2] + unpacks.min.y)) * defScaleVec
+			# 0x41000 - LoadVector3sXAxis
+			elif compression == 0x41000:
+				x = bs.readFloat()
+				y = unpacks.max.y
+				z = unpacks.max.z
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x42000 - LoadVector3sYAxis
+			elif compression == 0x42000:
+				x = unpacks.max.x
+				y = bs.readFloat()
+				z = unpacks.max.z
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x43000 - LoadVector3sZAxis
+			elif compression == 0x43000:
+				x = unpacks.max.x
+				y = unpacks.max.y
+				z = bs.readFloat()
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x44000 - LoadVector3sXYZAxis
+			elif compression == 0x44000:
+				x = y = z = bs.readFloat()
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x45000 - LoadVector3sXYAxis16Bit
+			elif compression == 0x45000:
+				x = unpacks.max.x * (bs.readUShort() / 0xFFFF) + unpacks.max.z
+				y = unpacks.max.y * (bs.readUShort() / 0xFFFF) + unpacks.max.w
+				z = unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x46000 - LoadVector3sXZAxis16Bit
+			elif compression == 0x46000:
+				x = unpacks.max.x * (bs.readUShort() / 0xFFFF) + unpacks.max.z
+				y = unpacks.max.w
+				z = unpacks.max.y * (bs.readUShort() / 0xFFFF) + unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x47000 - LoadVector3sYZAxis16Bit
+			elif compression == 0x47000:
+				x = unpacks.max.z
+				y = unpacks.max.x * (bs.readUShort() / 0xFFFF) + unpacks.max.w
+				z = unpacks.max.y * (bs.readUShort() / 0xFFFF) + unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x50000 - LoadVector3s13Bit
+			elif compression == 0x50000:
+				if self.version <= 65:
+					# RE2 - LoadQuaternions16Bit style (different)
+					rawVec = [convertBits(bs.readUShort(), 16), convertBits(bs.readUShort(), 16), convertBits(bs.readUShort(), 16)]
+					output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)) * defScaleVec
+				else:
+					# LoadVector3s13Bit - 5 bytes big-endian
+					val = readBytesAsBigEndian(bs, 5)
+					x = unpacks.max.x * ((val >> 0) & 0x1FFF) / 0x1FFF + unpacks.max.w
+					y = unpacks.max.y * ((val >> 13) & 0x1FFF) / 0x1FFF + unpacks.min.x
+					z = unpacks.max.z * ((val >> 26) & 0x1FFF) / 0x1FFF + unpacks.min.y
+					output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x55000 - LoadVector3sXYAxis20Bit
+			elif compression == 0x55000:
+				val = readBytesAsBigEndian(bs, 5)
+				x = unpacks.max.x * ((val >> 0) & 0xFFFFF) / 0xFFFFF + unpacks.max.z
+				y = unpacks.max.y * ((val >> 20) & 0xFFFFF) / 0xFFFFF + unpacks.max.w
+				z = unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x56000 - LoadVector3sYZAxis20Bit
+			elif compression == 0x56000:
+				val = readBytesAsBigEndian(bs, 5)
+				x = unpacks.max.z
+				y = unpacks.max.x * ((val >> 0) & 0xFFFFF) / 0xFFFFF + unpacks.max.w
+				z = unpacks.max.y * ((val >> 20) & 0xFFFFF) / 0xFFFFF + unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x57000 - LoadVector3sZXAxis20Bit
+			elif compression == 0x57000:
+				val = readBytesAsBigEndian(bs, 5)
+				x = unpacks.max.y * ((val >> 20) & 0xFFFFF) / 0xFFFFF + unpacks.max.z
+				y = unpacks.max.w
+				z = unpacks.max.x * ((val >> 0) & 0xFFFFF) / 0xFFFFF + unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x60000 - LoadVector3s16Bit
+			elif compression == 0x60000:
+				val = readBytesAsBigEndian(bs, 6)
+				x = unpacks.max.x * ((val >> 0) & 0xFFFF) / 0xFFFF + unpacks.max.w
+				y = unpacks.max.y * ((val >> 16) & 0xFFFF) / 0xFFFF + unpacks.min.x
+				z = unpacks.max.z * ((val >> 32) & 0xFFFF) / 0xFFFF + unpacks.min.y
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x65000 - LoadVector3sXYAxis24Bit
+			elif compression == 0x65000:
+				val = readBytesAsBigEndian(bs, 6)
+				x = unpacks.max.x * ((val >> 0) & 0xFFFFFF) / 0xFFFFFF + unpacks.max.z
+				y = unpacks.max.y * ((val >> 24) & 0xFFFFFF) / 0xFFFFFF + unpacks.max.w
+				z = unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x66000 - LoadVector3sYZAxis24Bit
+			elif compression == 0x66000:
+				val = readBytesAsBigEndian(bs, 6)
+				x = unpacks.max.z
+				y = unpacks.max.x * ((val >> 0) & 0xFFFFFF) / 0xFFFFFF + unpacks.max.w
+				z = unpacks.max.y * ((val >> 24) & 0xFFFFFF) / 0xFFFFFF + unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x67000 - LoadVector3sZXAxis24Bit
+			elif compression == 0x67000:
+				val = readBytesAsBigEndian(bs, 6)
+				x = unpacks.max.y * ((val >> 24) & 0xFFFFFF) / 0xFFFFFF + unpacks.max.z
+				y = unpacks.max.w
+				z = unpacks.max.x * ((val >> 0) & 0xFFFFFF) / 0xFFFFFF + unpacks.min.x
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x70000 - LoadVector3s21BitA (RE2) / LoadVector3s18Bit (RE3+)
 			elif compression == 0x70000:
-				rawVec = readPackedBitsVec3(bs.readUInt64(), 21)
-				output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)) * defScaleVec
+				if self.version <= 65:
+					rawVec = readPackedBitsVec3(bs.readUInt64(), 21)
+					output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)) * defScaleVec
+				else:
+					# LoadVector3s18Bit - 7 bytes big-endian
+					val = readBytesAsBigEndian(bs, 7)
+					x = unpacks.max.x * ((val >> 0) & 0x3FFFF) / 0x3FFFF + unpacks.max.w
+					y = unpacks.max.y * ((val >> 18) & 0x3FFFF) / 0x3FFFF + unpacks.min.x
+					z = unpacks.max.z * ((val >> 36) & 0x3FFFF) / 0x3FFFF + unpacks.min.y
+					output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x80000 - LoadVector3s21BitB
 			elif compression == 0x80000:
 				rawVec = readPackedBitsVec3(bs.readUInt64(), 21)
-				output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.max.w, unpacks.max.y * rawVec[1] + unpacks.min.x, unpacks.max.z * rawVec[2] + unpacks.min.y)) * defScaleVec
-			elif (compression == 0x31000 and self.version <= 65) or (compression == 0x41000 and self.version >= 78): #LoadVector3sXAxis
-				output = NoeVec3((bs.readFloat(), unpacks.max.y, unpacks.max.z)) * defScaleVec
-			elif (compression == 0x32000 and self.version <= 65) or (compression == 0x42000 and self.version >= 78): #LoadVector3sYAxis
-				output = NoeVec3((unpacks.max.x, bs.readFloat(), unpacks.max.z)) * defScaleVec
-			elif (compression == 0x33000 and self.version <= 65) or (compression == 0x43000 and self.version >= 78): #LoadVector3sZAxis
-				output = NoeVec3((unpacks.max.x, unpacks.max.y, bs.readFloat())) * defScaleVec
-			elif compression == 0x21000:
-				output = NoeVec3((unpacks.max.x * convertBits(bs.readUShort(), 16) + unpacks.max.y, unpacks.max.z, unpacks.max.w)) * defScaleVec
-			elif compression == 0x22000:
-				output = NoeVec3((unpacks.max.y, unpacks.max.x * convertBits(bs.readUShort(), 16) + unpacks.max.z, unpacks.max.w)) * defScaleVec
-			elif compression == 0x23000:
-				output = NoeVec3((unpacks.max.y, unpacks.max.z, unpacks.max.x * convertBits(bs.readUShort(), 16) + unpacks.max.w)) * defScaleVec
+				if self.version <= 65:
+					output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)) * defScaleVec
+				else:
+					output = NoeVec3((unpacks.max.x * rawVec[0] + unpacks.max.w, unpacks.max.y * rawVec[1] + unpacks.min.x, unpacks.max.z * rawVec[2] + unpacks.min.y)) * defScaleVec
+			# 0x85000 - LoadVector3sXYAxis (two floats)
+			elif compression == 0x85000:
+				x = bs.readFloat()
+				y = bs.readFloat()
+				z = unpacks.max.z
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x86000 - LoadVector3sYZAxis (two floats)
+			elif compression == 0x86000:
+				x = unpacks.max.x
+				y = bs.readFloat()
+				z = bs.readFloat()
+				output = NoeVec3((x, y, z)) * defScaleVec
+			# 0x87000 - LoadVector3sZXAxis (two floats)
+			elif compression == 0x87000:
+				z = bs.readFloat()
+				y = unpacks.max.y
+				x = bs.readFloat()
+				output = NoeVec3((x, y, z)) * defScaleVec
 			else:
 				print("Unknown", "Translation" if ftype=="pos" else "Scale", "type:", "0x"+'{:02X}'.format(compression))
 				output = NoeVec3((0,0,0)) if ftype=="pos" else NoeVec3((100,100,100))
 		elif ftype=="rot":
-			if compression == 0x00000: #LoadQuaternionsFull
+			# 0x00000 - LoadQuaternionsFull
+			if compression == 0x00000:
 				output = NoeQuat((bs.readFloat(), bs.readFloat(), bs.readFloat(), bs.readFloat())).transpose()
-			elif compression == 0xB0000 or compression == 0xC0000: #LoadQuaternions3Component
-				#rawVec = [bs.readFloat(), bs.readFloat(), bs.readFloat()]
-				#output = NoeQuat((rawVec[0], rawVec[1], rawVec[2], wRot(rawVec))).transpose()
-				output = NoeQuat3((bs.readFloat(), bs.readFloat(), bs.readFloat())).toQuat().transpose()
-			elif compression == 0x20000: #//LoadQuaternions5Bit RE3
+			# 0x20000 - LoadQuaternions5Bit
+			elif compression == 0x20000:
 				rawVec = readPackedBitsVec3(bs.readUShort(), 5)
 				output = NoeQuat3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)).toQuat().transpose()
+			# 0x21000 - LoadQuaternionsXAxis16Bit
 			elif compression == 0x21000:
-				output = NoeQuat3((unpacks.max.x * convertBits(bs.readUShort(), 16) + unpacks.max.y, 0, 0)).toQuat().transpose()
+				x = unpacks.max.x * (bs.readUShort() / 0xFFFF) + unpacks.max.y
+				output = NoeQuat3((x, 0, 0)).toQuat().transpose()
+			# 0x22000 - LoadQuaternionsYAxis16Bit
 			elif compression == 0x22000:
-				output = NoeQuat3((0, unpacks.max.x * convertBits(bs.readUShort(), 16) + unpacks.max.y, 0)).toQuat().transpose()
+				y = unpacks.max.x * (bs.readUShort() / 0xFFFF) + unpacks.max.y
+				output = NoeQuat3((0, y, 0)).toQuat().transpose()
+			# 0x23000 - LoadQuaternionsZAxis16Bit
 			elif compression == 0x23000:
-				output = NoeQuat3((0, 0, unpacks.max.x * convertBits(bs.readUShort(), 16) + unpacks.max.y)).toQuat().transpose()
-			elif compression == 0x30000 and self.version >= 78: #LoadQuaternions8Bit RE3
-				rawVec = [convertBits(bs.readUByte(), 8), convertBits(bs.readUByte(), 8), convertBits(bs.readUByte(), 8)]
-				output = NoeQuat3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)).toQuat().transpose()
+				z = unpacks.max.x * (bs.readUShort() / 0xFFFF) + unpacks.max.y
+				output = NoeQuat3((0, 0, z)).toQuat().transpose()
+			# 0x30000 - LoadQuaternions10Bit (RE2) / LoadQuaternions8Bit (RE3+)
 			elif compression == 0x30000:
+				if self.version <= 65:
+					rawVec = readPackedBitsVec3(bs.readUInt(), 10)
+				else:
+					rawVec = [bs.readUByte() / 0xFF, bs.readUByte() / 0xFF, bs.readUByte() / 0xFF]
+				output = NoeQuat3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)).toQuat().transpose()
+			# 0x31000 - LoadQuaternionsXAxis (RE2) / LoadQuaternionsXAxis24Bit (RE3+)
+			elif compression == 0x31000:
+				if self.version <= 65:
+					output = NoeQuat3((bs.readFloat(), 0, 0)).toQuat().transpose()
+				else:
+					data = readBytesAsBigEndian32(bs, 3)
+					x = unpacks.max.x * (data / 0xFFFFFF) + unpacks.max.y
+					output = NoeQuat3((x, 0, 0)).toQuat().transpose()
+			# 0x32000 - LoadQuaternionsYAxis (RE2) / LoadQuaternionsYAxis24Bit (RE3+)
+			elif compression == 0x32000:
+				if self.version <= 65:
+					output = NoeQuat3((0, bs.readFloat(), 0)).toQuat().transpose()
+				else:
+					data = readBytesAsBigEndian32(bs, 3)
+					y = unpacks.max.x * (data / 0xFFFFFF) + unpacks.max.y
+					output = NoeQuat3((0, y, 0)).toQuat().transpose()
+			# 0x33000 - LoadQuaternionsZAxis (RE2) / LoadQuaternionsZAxis24Bit (RE3+)
+			elif compression == 0x33000:
+				if self.version <= 65:
+					output = NoeQuat3((0, 0, bs.readFloat())).toQuat().transpose()
+				else:
+					data = readBytesAsBigEndian32(bs, 3)
+					z = unpacks.max.x * (data / 0xFFFFFF) + unpacks.max.y
+					output = NoeQuat3((0, 0, z)).toQuat().transpose()
+			# 0x40000 - LoadQuaternions10Bit
+			elif compression == 0x40000:
 				rawVec = readPackedBitsVec3(bs.readUInt(), 10)
 				output = NoeQuat3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)).toQuat().transpose()
-			elif compression == 0x31000 or compression == 0x41000:
+			# 0x41000 - LoadQuaternionsXAxis
+			elif compression == 0x41000:
 				output = NoeQuat3((bs.readFloat(), 0, 0)).toQuat().transpose()
-			elif compression == 0x32000 or compression == 0x42000:
+			# 0x42000 - LoadQuaternionsYAxis
+			elif compression == 0x42000:
 				output = NoeQuat3((0, bs.readFloat(), 0)).toQuat().transpose()
-			elif compression == 0x33000 or compression == 0x43000:
+			# 0x43000 - LoadQuaternionsZAxis
+			elif compression == 0x43000:
 				output = NoeQuat3((0, 0, bs.readFloat())).toQuat().transpose()
-			elif compression == 0x40000: #LoadQuaternions10Bit RE3
-				rawVec = readPackedBitsVec3(bs.readUInt(), 10)
+			# 0x50000 - LoadQuaternions16Bit (RE2) / LoadQuaternions13Bit (RE3+)
+			elif compression == 0x50000:
+				if self.version <= 65:
+					rawVec = [bs.readUShort() / 0xFFFF, bs.readUShort() / 0xFFFF, bs.readUShort() / 0xFFFF]
+				else:
+					val = readBytesAsBigEndian(bs, 5)
+					rawVec = [((val >> 0) & 0x1FFF) / 0x1FFF, ((val >> 13) & 0x1FFF) / 0x1FFF, ((val >> 26) & 0x1FFF) / 0x1FFF]
 				output = NoeQuat3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)).toQuat().transpose()
-			elif compression == 0x50000 and self.version <= 65: #LoadQuaternions16Bit RE2
-				rawVec = [convertBits(bs.readUShort(), 16), convertBits(bs.readUShort(), 16), convertBits(bs.readUShort(), 16)]
+			# 0x60000 - LoadQuaternions16Bit
+			elif compression == 0x60000:
+				# MHWilds (motlist 992) and later use big-endian
+				# Earlier versions use little-endian
+				if self.motlist and self.motlist.version >= 992:
+					val = readBytesAsBigEndian(bs, 6)
+					rawVec = [((val >> 0) & 0xFFFF) / 0xFFFF, ((val >> 16) & 0xFFFF) / 0xFFFF, ((val >> 32) & 0xFFFF) / 0xFFFF]
+				else:
+					rawVec = [bs.readUShort() / 0xFFFF, bs.readUShort() / 0xFFFF, bs.readUShort() / 0xFFFF]
 				output = NoeQuat3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)).toQuat().transpose()
-			elif compression == 0x50000: #LoadQuaternions13Bit RE3
-				rawBytes = [bs.readUByte(), bs.readUByte(), bs.readUByte(), bs.readUByte(), bs.readUByte()]
-				retrieved = (rawBytes[0] << 32) | (rawBytes[1] << 24) | (rawBytes[2] << 16) | (rawBytes[3] << 8) | (rawBytes[4] << 0)
-				rawVec = readPackedBitsVec3(retrieved, 13)
+			# 0x70000 - LoadQuaternions21Bit (RE2) / LoadQuaternions18Bit (RE3+)
+			elif compression == 0x70000:
+				if self.version <= 65:
+					rawVec = readPackedBitsVec3(bs.readUInt64(), 21)
+				else:
+					val = readBytesAsBigEndian(bs, 7)
+					rawVec = [((val >> 0) & 0x3FFFF) / 0x3FFFF, ((val >> 18) & 0x3FFFF) / 0x3FFFF, ((val >> 36) & 0x3FFFF) / 0x3FFFF]
 				output = NoeQuat3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)).toQuat().transpose()
-			elif compression == 0x60000: #LoadQuaternions16Bit RE3
-				#output = NoeQuat((0,0,0,1))
-				rawVec = [convertBits(bs.readUShort(), 16), convertBits(bs.readUShort(), 16), convertBits(bs.readUShort(), 16)]
-				output = NoeQuat3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)).toQuat().transpose()
-			elif (compression == 0x70000 and self.version <= 65) or (compression == 0x80000 and self.version >= 78): #LoadQuaternions21Bit RE2 and LoadQuaternions21Bit RE3
+			# 0x80000 - LoadQuaternions21Bit
+			elif compression == 0x80000:
 				rawVec = readPackedBitsVec3(bs.readUInt64(), 21)
 				output = NoeQuat3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)).toQuat().transpose()
-			elif compression == 0x70000 and self.version >= 78: #LoadQuaternions18Bit RE3
-				rawBytes = [bs.readUByte(), bs.readUByte(), bs.readUByte(), bs.readUByte(), bs.readUByte(), bs.readUByte(), bs.readUByte()]
-				retrieved = (rawBytes[0] << 48) | (rawBytes[1] << 40) | (rawBytes[2] << 32) | (rawBytes[3] << 24) | (rawBytes[4] << 16) | (rawBytes[5] << 8) | (rawBytes[6] << 0)
-				rawVec = readPackedBitsVec3(retrieved, 18)
-				output = NoeQuat3((unpacks.max.x * rawVec[0] + unpacks.min.x, unpacks.max.y * rawVec[1] + unpacks.min.y, unpacks.max.z * rawVec[2] + unpacks.min.z)).toQuat().transpose()
+			# 0xB0000/0xC0000 - LoadQuaternions3Component
+			elif compression == 0xB0000 or compression == 0xC0000:
+				output = NoeQuat3((bs.readFloat(), bs.readFloat(), bs.readFloat())).toQuat().transpose()
 			else:
 				print("Unknown Rotation type:", "0x"+'{:02X}'.format(compression))
 				output = NoeQuat((0,0,0,1))
@@ -2825,6 +3173,9 @@ class motlistFile:
 		motionIDsOffset = bs.readUInt64()
 		self.name = readUnicodeStringAt(bs, bs.readUInt64())
 		bs.seek(8, 1)
+		# RE9 (1047) and later have an extra 8-byte field before numOffsets
+		if self.version >= 1047:
+			bs.seek(8, 1)  # Skip uknOffset
 		numOffsets = bs.readUInt()
 		bs.seek(pointersOffset)
 		self.motionIDs = {}
@@ -2841,7 +3192,7 @@ class motlistFile:
 			if motAddress and motAddress not in self.pointers and readUIntAt(bs, motAddress+4) == 544501613: # 'mot'
 				self.pointers.append(motAddress)
 				bs.seek(motAddress)
-				mot = motFile(bs.readBytes(bs.getSize()-bs.tell()), self, motAddress, " ID: " + str(self.motionIDs[i] if i in self.motionIDs else ""))
+				mot = motFile(bs.readBytes(bs.getSize()-bs.tell()), self, motAddress, (" ID: " + str(self.motionIDs[i] if i in self.motionIDs else "")) if bShowMotionIds is True else "")
 				self.mots.append(mot)
 		
 	def findBoneHeaders(self):
@@ -2932,7 +3283,20 @@ def motlistLoadModel(data, mdlList):
 	dialogOptions.motDialog = None
 	motlist = motlistFile(data, rapi.getInputName())
 	mlDialog = openOptionsDialogImportWindow(None, None, {"motlist":motlist, "isMotlist":True})
-	mlDialog.createMotlistWindow()
+	
+	skipDialog = bAutoLoadMotions or noesis.optWasInvoked("-noprompt") or noesis.optWasInvoked("-b")
+	if skipDialog:
+		mlDialog.motItems = [mot.name for mot in motlist.mots]
+		if mlDialog.motItems:
+			mlDialog.motItems.insert(0, "[ALL] - " + motlist.name)
+		mlDialog.pak = motlist
+		mlDialog.noeWnd = None
+		mlDialog.loadItems = mlDialog.motItems[1:]
+		mlDialog.fullLoadItems = [mlDialog.pak.path] * len(mlDialog.loadItems)
+		mlDialog.loadedMlists = {mlDialog.pak.path: motlist}
+		mlDialog.isOpen = False
+	else:
+		mlDialog.createMotlistWindow()
 	
 	mdl = NoeModel()
 	
@@ -2977,19 +3341,42 @@ def setOffsets(ver):
 	global BBskipBytes, numNodesLocation, LOD1OffsetLocation, normalsRecalcOffsLocation, bsHdrOffLocation, bsIndicesOffLocation, \
 	vBuffHdrOffsLocation, bonesOffsLocation, nodesIndicesOffsLocation, namesOffsLocation, floatsHdrOffsLocation
 	BBskipBytes = 				8 	if ver == 1 else 0
-	numNodesLocation = 			18 	if ver < 3 else 20
-	LOD1OffsetLocation = 		24 	if ver < 3 else 32
-	bsHdrOffLocation = 			64 	if ver < 3 else 56
-	normalsRecalcOffsLocation = 56 	if ver < 3 else 64
-	vBuffHdrOffsLocation = 		80 	if ver < 3 else 72
-	floatsHdrOffsLocation = 	72 	if ver < 3 else 96
-	bonesOffsLocation = 		48 	if ver < 3 else 104
-	nodesIndicesOffsLocation = 	96 	if ver < 3 else 112
-	bsIndicesOffLocation = 		112 if ver < 3 else 128
-	namesOffsLocation = 		120 if ver < 3 else 144
+	if ver >= 4:
+		numNodesLocation = 			20
+		LOD1OffsetLocation = 		48
+		bsHdrOffLocation = 			72
+		normalsRecalcOffsLocation = 80
+		vBuffHdrOffsLocation = 		88
+		floatsHdrOffsLocation = 	112
+		bonesOffsLocation = 		120
+		nodesIndicesOffsLocation = 	128
+		bsIndicesOffLocation = 		144
+		namesOffsLocation = 		152
+	elif ver >= 3:
+		numNodesLocation = 			20
+		LOD1OffsetLocation = 		32
+		bsHdrOffLocation = 			56
+		normalsRecalcOffsLocation = 64
+		vBuffHdrOffsLocation = 		72
+		floatsHdrOffsLocation = 	96
+		bonesOffsLocation = 		104
+		nodesIndicesOffsLocation = 	112
+		bsIndicesOffLocation = 		128
+		namesOffsLocation = 		144
+	else:
+		numNodesLocation = 			18
+		LOD1OffsetLocation = 		24
+		bsHdrOffLocation = 			64
+		normalsRecalcOffsLocation = 56
+		vBuffHdrOffsLocation = 		80
+		floatsHdrOffsLocation = 	72
+		bonesOffsLocation = 		48
+		nodesIndicesOffsLocation = 	96
+		bsIndicesOffLocation = 		112
+		namesOffsLocation = 		120
 	
 	if sGameName == "AJ_AAT" or sGameName == "DD2" or sGameName == "DRDR":
-		namesOffsLocation = 136 # on unrigged meshes its still 144
+		namesOffsLocation = 136
 	#if isExoPrimal:
 	#	nodesIndicesOffsLocation = 104
 	#	namesOffsLocation = 136 
@@ -3063,12 +3450,24 @@ class meshFile(object):
 		elif (meshVersion == 230406984 or self.path.find(".230612127") != -1): #Apollo Justice
 			isMeshVer3 = True
 			sGameName = "AJ_AAT"
-		elif (meshVersion == 230517984 or self.path.find(".231011879") != -1): #DD2
+		elif (meshVersion == 230517984 or self.path.find(".240423143") != -1 or self.path.find(".231011879") != -1): #DD2
 			isMeshVer3 = True
 			sGameName = "DD2"
 		elif (meshVersion == 240423829 or self.path.find(".240424828") != -1): #DD2
 			isMeshVer3 = True
 			sGameName = "DRDR"
+		elif (meshVersion == 240704828 or self.path.find(".241111606") != -1 or self.path.find(".240820143") != -1):  # MHWs
+			isMeshVer3 = True
+			sGameName = "MHWs"
+		elif (meshVersion == 250203152 or self.path.find(".250604100") != -1):  # MHS3
+			isMeshVer3 = True
+			sGameName = "MHS3"
+		elif meshVersion == 250904410:  # RE9
+			isMeshVer3 = True
+			sGameName = "RE9"
+		elif (meshVersion == 250707828 or self.path.find(".250925211") != -1):  # Pragmata
+			isMeshVer3 = True
+			sGameName = "Pragmata"
 		
 	'''MDF IMPORT ========================================================================================================================================================================'''
 	def createMaterials(self, matCount):
@@ -3080,6 +3479,7 @@ class meshFile(object):
 		skipPrompt = 0
 		
 		modelExt = formats[sGameName]["modelExt"]
+		inputExt = os.path.splitext(self.path.lower())[1]
 		texExt = formats[sGameName]["texExt"]
 		mmtrExt = formats[sGameName]["mmtrExt"]
 		nDir = formats[sGameName]["nDir"]
@@ -3102,13 +3502,13 @@ class meshFile(object):
 		pathPrefix = inputName
 		while pathPrefix.find("out.") != -1: 
 			pathPrefix = pathPrefix.replace("out.",".")
-		pathPrefix = pathPrefix.replace(".mesh", "").replace(modelExt,"").replace(".NEW", "")
+		pathPrefix = pathPrefix.replace(".mesh", "").replace(inputExt, "").replace(".NEW", "")
 		
 		if sGameName == "ReVerse" and os.path.isdir(os.path.dirname(inputName) + "\\Material"):
 			pathPrefix = (os.path.dirname(inputName) + "\\Material\\" + rapi.getLocalFileName(inputName).replace("SK_", "M_")).replace(".NEW", "")
 			while pathPrefix.find("out.") != -1: 
 				pathPrefix = pathPrefix.replace("out.",".")
-			pathPrefix = pathPrefix.replace(".mesh" + modelExt,"")
+			pathPrefix = pathPrefix.replace(".mesh" + inputExt,"")
 			if not rapi.checkFileExists(pathPrefix + mdfExt):
 				pathPrefix = pathPrefix.replace("00_", "")
 			if not rapi.checkFileExists(pathPrefix + mdfExt):
@@ -3142,7 +3542,7 @@ class meshFile(object):
 				pathPrefix = extractedNativesPath + re.sub(r'.*stm\\', '', inputName)
 			else:
 				pathPrefix = extractedNativesPath + re.sub(r'.*x64\\', '', inputName) 
-			pathPrefix = pathPrefix.replace(modelExt,"").replace(".mesh","")
+			pathPrefix = pathPrefix.replace(inputExt,"").replace(".mesh","")
 			materialFileName = (pathPrefix + mdfExt)
 			print (materialFileName)
 			if not (rapi.checkFileExists(materialFileName)):
@@ -3201,6 +3601,7 @@ class meshFile(object):
 			
 		bs = rapi.loadIntoByteArray(materialFileName)
 		bs = NoeBitStream(bs)
+		fileSize = bs.getSize()
 		#Magic, Unknown, MaterialCount, Unknown, Unknown
 		matHeader = [bs.readUInt(), bs.readUShort(), bs.readUShort(), bs.readUInt(), bs.readUInt()]
 		matCountMDF = matHeader[2]
@@ -3211,6 +3612,14 @@ class meshFile(object):
 		
 		usedMats = [mat.name for mat in self.fullMatList]
 		usedTexs = [tex.name for tex in self.fullTexList]
+		
+		def isValidMdfOffset(offset):
+			return isinstance(offset, int) and offset >= 0 and offset < fileSize
+		
+		newFloatHeaderGames = ("MHWs", "MHS3", "RE9", "Pragmata")
+		floatHeaderSize = 0x20 if sGameName in newFloatHeaderGames else 0x18
+		maxReasonableParams = 4096
+		maxReasonableTextures = 4096
 		
 		#Parse Materials
 		for i in range(matCountMDF):
@@ -3251,6 +3660,22 @@ class meshFile(object):
 			if self.mdfVer >= 4:
 				uknSF6offset = bs.readUInt64()
 				
+			if not isValidMdfOffset(materialNamesOffset) or not isValidMdfOffset(mmtr_PathOffs):
+				print("WARNING: Skipping material", i, "due to invalid MDF string offsets.")
+				continue
+			if not isValidMdfOffset(floatHdrOffs) or not isValidMdfOffset(texHdrOffs) or not isValidMdfOffset(floatStartOffs):
+				print("WARNING: Skipping material", i, "due to invalid MDF table offsets.")
+				continue
+			maxFloatCount = max(0, (fileSize - floatHdrOffs) // floatHeaderSize)
+			texHeaderSize = 0x20 if self.mdfVer >= 2 else 0x18
+			maxTexCount = max(0, (fileSize - texHdrOffs) // texHeaderSize)
+			if floatCount > min(maxFloatCount, maxReasonableParams):
+				print("WARNING: Skipping material", i, "due to implausible float parameter count:", floatCount)
+				continue
+			if texCount > min(maxTexCount, maxReasonableTextures):
+				print("WARNING: Skipping material", i, "due to implausible texture count:", texCount)
+				continue
+			
 			bs.seek(materialNamesOffset)
 			materialName = ReadUnicodeString(bs)
 			bs.seek(mmtr_PathOffs)
@@ -3293,20 +3718,35 @@ class meshFile(object):
 				print ("Material Properties:")
 				
 			for j in range(floatCount): # floats
-				bs.seek(floatHdrOffs + (j * 0x18))
+				floatHeaderOffset = floatHdrOffs + (j * floatHeaderSize)
+				if floatHeaderOffset < 0 or floatHeaderOffset + 0x18 > fileSize:
+					print("WARNING: Skipping invalid material parameter table entry", j, "for material", materialName)
+					continue
+				bs.seek(floatHeaderOffset)
 				paramInfo.append([bs.readUInt64(), bs.readUInt64(), bs.readUInt(), bs.readUInt()]) #dscrptnOffs[0], type[1], strctOffs[2], numFloats[3] 
+				if not isValidMdfOffset(paramInfo[j][0]):
+					print("WARNING: Skipping invalid material parameter header", j, "for material", materialName)
+					continue
 				bs.seek(paramInfo[j][0])
 				paramType = ReadUnicodeString(bs)
 				
 				colours = None
 				if self.mdfVer >= 2: #sGameName == "RERT" or sGameName == "RE3" or sGameName == "ReVerse" or sGameName == "RE8" or sGameName == "MHRise" or sGameName == "SF6":
-					bs.seek(floatStartOffs + paramInfo[j][2])
+					paramDataOffs = floatStartOffs + paramInfo[j][2]
+					if not isValidMdfOffset(paramDataOffs):
+						print("WARNING: Skipping invalid material parameter data", paramType, "for material", materialName)
+						continue
+					bs.seek(paramDataOffs)
 					if paramInfo[j][3] == 4:
 						colours = NoeVec4((bs.readFloat(), bs.readFloat(), bs.readFloat(), bs.readFloat()))
 					elif paramInfo[j][3] == 1:
 						colours = bs.readFloat()
 				else:
-					bs.seek(floatStartOffs + paramInfo[j][3])
+					paramDataOffs = floatStartOffs + paramInfo[j][3]
+					if not isValidMdfOffset(paramDataOffs):
+						print("WARNING: Skipping invalid material parameter data", paramType, "for material", materialName)
+						continue
+					bs.seek(paramDataOffs)
 					if paramInfo[j][2] == 4:
 						colours = NoeVec4((bs.readFloat(), bs.readFloat(), bs.readFloat(), bs.readFloat()))
 					elif paramInfo[j][2] == 1:
@@ -3356,6 +3796,7 @@ class meshFile(object):
 			alreadyLoadedTexs = [tex.name for tex in self.fullTexList]
 			alreadyLoadedMats = [mat.name for mat in self.fullMatList]
 			secondaryDiffuse = ""
+			lastTextureName = ""
 			
 			for j in range(texCount): # texture headers
 				
@@ -3367,10 +3808,14 @@ class meshFile(object):
 				else:
 					bs.seek(texHdrOffs + (j * 0x18))
 					textureInfo.append([bs.readUInt64(), bs.readUInt64(), bs.readUInt64()])
+				if not isValidMdfOffset(textureInfo[j][0]) or not isValidMdfOffset(textureInfo[j][2]):
+					print("WARNING: Skipping invalid texture header", j, "for material", materialName)
+					continue
 				bs.seek(textureInfo[j][0])
 				textureType = ReadUnicodeString(bs)
 				bs.seek(textureInfo[j][2])
 				textureName = ReadUnicodeString(bs).replace("@", "")
+				lastTextureName = textureName
 				
 				textureFilePath = ""
 				texName = ""
@@ -3573,7 +4018,10 @@ class meshFile(object):
 			
 			if texCount:
 				if not bFoundBM:
-					dummyTexName = textureName.replace(texOutputExt, "_NoesisColor" + texOutputExt)
+					dummyBaseName = lastTextureName if lastTextureName else (material.name + "_NoesisColor")
+					dummyTexName = dummyBaseName.replace(texOutputExt, "_NoesisColor" + texOutputExt)
+					if dummyTexName == dummyBaseName:
+						dummyTexName = dummyBaseName + texOutputExt
 					material.setTexture(dummyTexName)
 					if dummyTexName not in alreadyLoadedTexs:
 						try:
@@ -3655,7 +4103,7 @@ class meshFile(object):
 		bDoSkin = True
 		
 		bs.seek(numNodesLocation)
-		numNodes = bs.readUInt()
+		numNodes = bs.readUShort() if self.ver >= 4 else bs.readUInt()
 		bs.seek(LOD1OffsetLocation)
 		LOD1Offs = bs.readUInt64()
 		LOD2Offs = bs.readUInt64()
@@ -3702,8 +4150,106 @@ class meshFile(object):
 		
 		vertElemCountA = bs.readUShort()
 		vertElemCountB = bs.readUShort()
+		if sGameName in ("Pragmata", "MHS3", "RE9"):
+			bs.seek(16, 1)
 		faceBufferSize2nd = bs.readUInt64()
 		blendshapesOffset = bs.readUInt()
+		
+		streamingBufferList = []
+		if self.ver >= 3:
+			bs.readUInt64() #sunbreakSecondUnknown
+			bs.readUInt64() #sf6unkn0
+			streamVEOffset = bs.readUInt64() #streamingVertexElementOffset
+			bs.readUInt64() #sf6unkn2
+			afterMeshBufHdrPos = bs.tell()
+		
+		if self.ver >= 4:
+			savedPos = bs.tell()
+			bs.seek(160)
+			streamingInfoOffset = bs.readUInt64()
+			bs.seek(savedPos)
+			
+			if streamingInfoOffset > 0:
+				bs.seek(streamingInfoOffset)
+				streamEntryCount = bs.readUInt()
+				bs.readUInt() #unkn1
+				streamEntryOffset = bs.readUInt64()
+				
+				if streamEntryCount > 0:
+					bs.seek(streamEntryOffset)
+					streamInfoEntries = []
+					for si in range(streamEntryCount):
+						sBufStart = bs.readUInt()
+						sBufLen = bs.readUInt()
+						streamInfoEntries.append((sBufStart, sBufLen))
+					
+					streamingData = None
+					relPath = ""
+					if self.rootDir:
+						rootLower = self.rootDir.lower().rstrip("\\/")
+						pathLower = self.path.lower()
+						rootIdx = pathLower.find(rootLower)
+						if rootIdx != -1:
+							relPath = self.path[rootIdx + len(rootLower) + 1:]
+					
+					if relPath:
+						for sep in ["\\", "/"]:
+							streamPath = self.rootDir + "streaming" + sep + relPath
+							if rapi.checkFileExists(streamPath):
+								try:
+									streamingData = rapi.loadIntoByteArray(streamPath)
+								except:
+									pass
+								break
+					
+					if streamingData is not None and len(streamingData) > 0:
+						bs.seek(afterMeshBufHdrPos)
+						for si in range(streamEntryCount):
+							sUnkn0 = bs.readUInt64()
+							sTotalBufSize = bs.readUInt()
+							sVertBufLen = bs.readUInt()
+							sMainVECount = bs.readUShort()
+							sVECount = bs.readUShort()
+							if sGameName in ("Pragmata", "MHS3", "RE9"):
+								bs.seek(16, 1)
+							sUnpaddedBufSize = bs.readUInt()
+							for _skip in range(10):
+								bs.readUInt()
+							
+							sInfo = streamInfoEntries[si]
+							sVertBuf = streamingData[sInfo[0]:sInfo[0]+sVertBufLen]
+							sFaceBuf = streamingData[sInfo[0]+sVertBufLen:sInfo[0]+sUnpaddedBufSize]
+							
+							sVEH = []
+							if streamVEOffset > 0 and vertElemCountA > 0:
+								savedP = bs.tell()
+								paddedElemSize = ((8 * vertElemCountA + 15) // 16) * 16
+								bs.seek(streamVEOffset + (si * paddedElemSize))
+								for vi in range(vertElemCountA):
+									sVEH.append([bs.readUShort(), bs.readUShort(), bs.readUInt()])
+								bs.seek(savedP)
+							
+							streamingBufferList.append({
+								'vertexBuffer': sVertBuf,
+								'faceBuffer': sFaceBuf,
+								'vertElemHeaders': sVEH if sVEH else None,
+								'vertBuffSize': sVertBufLen,
+							})
+						
+						print("Loaded", len(streamingBufferList), "streaming buffer(s) from streaming file")
+						print("  streamVEOffset:", streamVEOffset, " vertElemCountA:", vertElemCountA)
+						for dbgSi, dbgBuf in enumerate(streamingBufferList):
+							print("  Stream buf", dbgSi, "vertSize:", len(dbgBuf['vertexBuffer']), "faceSize:", len(dbgBuf['faceBuffer']))
+							if dbgBuf['vertElemHeaders']:
+								for dbgVi, dbgVe in enumerate(dbgBuf['vertElemHeaders']):
+									print("    sVEH[%d] type=%d stride=%d offset=%d" % (dbgVi, dbgVe[0], dbgVe[1], dbgVe[2]))
+							else:
+								print("    sVEH: None (using main VEH as fallback)")
+					elif streamEntryCount > 0:
+						print("\nWARNING: This is a streaming mesh. The streaming mesh file is required.")
+						if relPath:
+							print("  Expected at: " + self.rootDir + "streaming\\" + relPath)
+						print("  Extract both mesh files from the game.\n")
 		
 		bs.seek(vertElemHdrOffs)
 		vertElemHeaders = []
@@ -3728,10 +4274,13 @@ class meshFile(object):
 				weightIndex = i
 			elif vertElemHeaders[i][0] == 5 and colorIndex == -1:
 				colorIndex = i
+		if len(streamingBufferList) > 0:
+			print("  Main VEH (posIdx=%d normIdx=%d uvIdx=%d wgtIdx=%d colIdx=%d):" % (positionIndex, normalIndex, uvIndex, weightIndex, colorIndex))
+			for dbgVi, dbgVe in enumerate(vertElemHeaders):
+				print("    VEH[%d] type=%d stride=%d offset=%d" % (dbgVi, dbgVe[0], dbgVe[1], dbgVe[2]))
 		bs.seek(vertBuffOffs)
 		
 		vertexStartIndex = bs.tell()
-		#print (vertElemHdrOffs, vertBuffOffs, uknVB, vertBuffSize, faceBuffOffs, vertElemCountA, vertElemCountB)
 		vertexBuffer = bs.readBytes(vertBuffSize)
 		submeshDataArr = []
 		
@@ -3790,7 +4339,7 @@ class meshFile(object):
 				boneMapCount = bs.readUInt()	
 				bAddNumbers = False
 				if rapi.getInputName().find(".noesis") == -1 and (not dialogOptions.dialog or len(dialogOptions.dialog.loadItems) == 1) and (not dialogOptions.motDialog or not dialogOptions.motDialog.loadItems) :
-					maxBones = 1024 if sGameName == "SF6" else 256
+					maxBones = 1024 if sGameName in ("SF6", "MHWs", "MHS3", "Pragmata", "RE9") else 256
 					if bAddBoneNumbers == 1 or noesis.optWasInvoked("-bonenumbers"):
 						bAddNumbers = True
 					elif bAddBoneNumbers == 2 and boneCount > maxBones and rapi.getInputName().lower().find(".scn") == -1:
@@ -3900,9 +4449,9 @@ class meshFile(object):
 					self.groupIDs.append(meshVertexInfo[len(meshVertexInfo)-1][0])
 					submeshData = []
 					for k in range(meshVertexInfo[j][1]):
-						if sGameName == "DRDR":
+						if sGameName == "DRDR" or self.ver >= 4:
 							submeshData.append([bs.readUShort(), bs.readUShort(), bs.readUInt(), bs.readUInt(), bs.readUInt(), bs.readUInt(), bs.readUInt64(), self.groupIDs[len(self.groupIDs)-1], bs.readUInt()])
-							del submeshData[len(submeshData)-1][2] #this is something new, not sure
+							del submeshData[len(submeshData)-1][2]
 						elif self.ver >= 2:
 							submeshData.append([bs.readUShort(), bs.readUShort(), bs.readUInt(), bs.readUInt(), bs.readUInt(), bs.readUInt64(), self.groupIDs[len(self.groupIDs)-1]]) 
 						else:
@@ -3921,6 +4470,26 @@ class meshFile(object):
 						facesBefore  = submeshData[k][3]
 						vertsBefore  = submeshData[k][4]
 						uknSubmeshInt1 = submeshData[k][5]
+						
+						bufferIdx = uknSubmeshID
+						curVertBuf = vertexBuffer
+						curVEH = vertElemHeaders
+						curFaceBuf = None
+						curVertStart = vertexStartIndex
+						isStreaming = False
+						if bufferIdx > 0 and bufferIdx - 1 < len(streamingBufferList):
+							sBuf = streamingBufferList[bufferIdx - 1]
+							curVertBuf = sBuf['vertexBuffer']
+							curFaceBuf = sBuf['faceBuffer']
+							if sBuf['vertElemHeaders']:
+								curVEH = sBuf['vertElemHeaders']
+							else:
+								print("WARNING: Sub %d bufIdx=%d has NO streaming VEH, using main VEH" % (k, bufferIdx))
+							curVertStart = 0
+							isStreaming = True
+						elif bufferIdx > 0 and len(streamingBufferList) == 0:
+							if vertBuffSize == 0:
+								continue
 						
 						numVerts = submeshData[k+1][4] - vertsBefore if k+1 < len(submeshData) else meshVertexInfo[j][4] - (submeshData[k][4] - numVertsLOD)
 						
@@ -3971,74 +4540,103 @@ class meshFile(object):
 							#rapi.rpgSetName(meshName + "__" + matName + "__" + str(submeshData[k][len(submeshData[k])-1]))
 							rapi.rpgSetName(meshName + '__' + matName)
 						
-						if positionIndex != -1:
+						if positionIndex != -1 and positionIndex < len(curVEH):
 							if self.pos: #position offset
 								posList = []
 								for v in range(vertsBefore, vertsBefore+numVerts):
 									idx = 12 * v
-									transVec = NoeVec3(((struct.unpack_from('f', vertexBuffer, idx))[0], (struct.unpack_from('f', vertexBuffer, idx + 4))[0], (struct.unpack_from('f', vertexBuffer, idx + 8))[0])) * self.rot.transpose()
+									transVec = NoeVec3(((struct.unpack_from('f', curVertBuf, idx))[0], (struct.unpack_from('f', curVertBuf, idx + 4))[0], (struct.unpack_from('f', curVertBuf, idx + 8))[0])) * self.rot.transpose()
 									posList.append(transVec[0] + self.pos[0]) 
 									posList.append(transVec[1] + self.pos[1])
 									posList.append(transVec[2] + self.pos[2])
 								posBuff = struct.pack("<" + 'f'*len(posList), *posList)
 								rapi.rpgBindPositionBufferOfs(posBuff, noesis.RPGEODATA_FLOAT, 12, 0)
 							else:
-								rapi.rpgBindPositionBufferOfs(vertexBuffer, noesis.RPGEODATA_FLOAT, vertElemHeaders[positionIndex][1], (vertElemHeaders[positionIndex][1] * vertsBefore))
+								rapi.rpgBindPositionBufferOfs(curVertBuf, noesis.RPGEODATA_FLOAT, curVEH[positionIndex][1], (curVEH[positionIndex][1] * vertsBefore))
 						
-						if normalIndex != -1 and bNORMsEnabled:
+						if normalIndex != -1 and normalIndex < len(curVEH) and bNORMsEnabled:
 							if bDebugNormals and not bColorsEnabled:
-								rapi.rpgBindColorBufferOfs(vertexBuffer, noesis.RPGEODATA_BYTE, vertElemHeaders[normalIndex][1], vertElemHeaders[normalIndex][2] + (vertElemHeaders[normalIndex][1] * vertsBefore), 4)
+								rapi.rpgBindColorBufferOfs(curVertBuf, noesis.RPGEODATA_BYTE, curVEH[normalIndex][1], curVEH[normalIndex][2] + (curVEH[normalIndex][1] * vertsBefore), 4)
 							else:
-								rapi.rpgBindNormalBufferOfs(vertexBuffer, noesis.RPGEODATA_BYTE, vertElemHeaders[normalIndex][1], vertElemHeaders[normalIndex][2] + (vertElemHeaders[normalIndex][1] * vertsBefore))
+								rapi.rpgBindNormalBufferOfs(curVertBuf, noesis.RPGEODATA_BYTE, curVEH[normalIndex][1], curVEH[normalIndex][2] + (curVEH[normalIndex][1] * vertsBefore))
 								if bTANGsEnabled:
-									rapi.rpgBindTangentBufferOfs(vertexBuffer, noesis.RPGEODATA_BYTE, vertElemHeaders[normalIndex][1], 4 + vertElemHeaders[normalIndex][2] + (vertElemHeaders[normalIndex][1] * vertsBefore))
+									rapi.rpgBindTangentBufferOfs(curVertBuf, noesis.RPGEODATA_BYTE, curVEH[normalIndex][1], 4 + curVEH[normalIndex][2] + (curVEH[normalIndex][1] * vertsBefore))
 						try:
 							rapi.rpgSetUVScaleBias(NoeVec3((self.uvBias[names[nameRemapTable[materialID]]][0], 1, 1)), NoeVec3((self.uvBias[names[nameRemapTable[materialID]]][1], 0, 0)))
 						except:
 							rapi.rpgSetUVScaleBias(NoeVec3((1,1,1)), NoeVec3((0,0,0)))
-						if uvIndex != -1 and bUVsEnabled:
-							rapi.rpgBindUV1BufferOfs(vertexBuffer, noesis.RPGEODATA_HALFFLOAT, vertElemHeaders[uvIndex][1], vertElemHeaders[uvIndex][2] + (vertElemHeaders[uvIndex][1] * vertsBefore))
-						if uv2Index != -1 and bUVsEnabled:
-							rapi.rpgBindUV2BufferOfs(vertexBuffer, noesis.RPGEODATA_HALFFLOAT, vertElemHeaders[uv2Index][1], vertElemHeaders[uv2Index][2] + (vertElemHeaders[uv2Index][1] * vertsBefore))
+						if uvIndex != -1 and uvIndex < len(curVEH) and bUVsEnabled:
+							rapi.rpgBindUV1BufferOfs(curVertBuf, noesis.RPGEODATA_HALFFLOAT, curVEH[uvIndex][1], curVEH[uvIndex][2] + (curVEH[uvIndex][1] * vertsBefore))
+						if uv2Index != -1 and uv2Index < len(curVEH) and bUVsEnabled:
+							rapi.rpgBindUV2BufferOfs(curVertBuf, noesis.RPGEODATA_HALFFLOAT, curVEH[uv2Index][1], curVEH[uv2Index][2] + (curVEH[uv2Index][1] * vertsBefore))
 						
-						if weightIndex != -1 and bSkinningEnabled and bDoSkin:
-							#rapi.rpgSetBoneMap(boneRemapTable)
+						if weightIndex != -1 and weightIndex < len(curVEH) and bSkinningEnabled and bDoSkin:
 							rapi.rpgSetBoneMap(self.fullRemapTable)
 							idxList = []
-							start = vertexStartIndex + vertElemHeaders[weightIndex][2] + (vertElemHeaders[weightIndex][1] * vertsBefore)
-							if sGameName == "SF6":
-								for v in range(numVerts):
-									bs.seek(start + vertElemHeaders[weightIndex][1] * v)
-									for bID in range(3):
-										idxList.append(bs.readBits(10)+fullRemapOffs)
-									bs.readBits(2)
-									for bID in range(3):
-										idxList.append(bs.readBits(10)+fullRemapOffs)
-									idxList.extend([0,0])
-								idxBuff = struct.pack("<" + 'H'*len(idxList), *idxList)
-								rapi.rpgBindBoneIndexBufferOfs(idxBuff, noesis.RPGEODATA_USHORT, 16, 0, 8)
-							elif fullBonesOffs:
-								for v in range(numVerts):
-									bs.seek(start + vertElemHeaders[weightIndex][1] * v)
-									for w in range(8):
-										idxList.append(bs.readUByte()+fullRemapOffs)
-								idxBuff = struct.pack("<" + 'H'*len(idxList), *idxList)
-								rapi.rpgBindBoneIndexBufferOfs(idxBuff, noesis.RPGEODATA_USHORT, 16, 0, 8)
+							wgtVEH = curVEH
+							if isStreaming:
+								wgtStream = NoeBitStream(curVertBuf)
+								start = wgtVEH[weightIndex][2] + (wgtVEH[weightIndex][1] * vertsBefore)
+								if sGameName in ("SF6", "MHWs", "MHS3", "Pragmata"):
+									for v in range(numVerts):
+										wgtStream.seek(start + wgtVEH[weightIndex][1] * v)
+										for bID in range(3):
+											idxList.append(wgtStream.readBits(10)+fullRemapOffs)
+										wgtStream.readBits(2)
+										for bID in range(3):
+											idxList.append(wgtStream.readBits(10)+fullRemapOffs)
+										idxList.extend([0,0])
+									idxBuff = struct.pack("<" + 'H'*len(idxList), *idxList)
+									rapi.rpgBindBoneIndexBufferOfs(idxBuff, noesis.RPGEODATA_USHORT, 16, 0, 8)
+								elif fullBonesOffs:
+									for v in range(numVerts):
+										wgtStream.seek(start + wgtVEH[weightIndex][1] * v)
+										for w in range(8):
+											idxList.append(wgtStream.readUByte()+fullRemapOffs)
+									idxBuff = struct.pack("<" + 'H'*len(idxList), *idxList)
+									rapi.rpgBindBoneIndexBufferOfs(idxBuff, noesis.RPGEODATA_USHORT, 16, 0, 8)
+								else:
+									rapi.rpgBindBoneIndexBufferOfs(curVertBuf, noesis.RPGEODATA_UBYTE, wgtVEH[weightIndex][1], wgtVEH[weightIndex][2] + (wgtVEH[weightIndex][1] * vertsBefore), 8)
+								rapi.rpgBindBoneWeightBufferOfs(curVertBuf, noesis.RPGEODATA_UBYTE, wgtVEH[weightIndex][1], wgtVEH[weightIndex][2] + (wgtVEH[weightIndex][1] * vertsBefore) + 8, 8)
 							else:
-								rapi.rpgBindBoneIndexBufferOfs(vertexBuffer, noesis.RPGEODATA_UBYTE, vertElemHeaders[weightIndex][1], vertElemHeaders[weightIndex][2] + (vertElemHeaders[weightIndex][1] * vertsBefore), 8)
-							rapi.rpgBindBoneWeightBufferOfs(vertexBuffer, noesis.RPGEODATA_UBYTE, vertElemHeaders[weightIndex][1], vertElemHeaders[weightIndex][2] + (vertElemHeaders[weightIndex][1] * vertsBefore) + 8, 8)
+								start = vertexStartIndex + vertElemHeaders[weightIndex][2] + (vertElemHeaders[weightIndex][1] * vertsBefore)
+								if sGameName in ("SF6", "MHWs", "MHS3", "Pragmata"):
+									for v in range(numVerts):
+										bs.seek(start + vertElemHeaders[weightIndex][1] * v)
+										for bID in range(3):
+											idxList.append(bs.readBits(10)+fullRemapOffs)
+										bs.readBits(2)
+										for bID in range(3):
+											idxList.append(bs.readBits(10)+fullRemapOffs)
+										idxList.extend([0,0])
+									idxBuff = struct.pack("<" + 'H'*len(idxList), *idxList)
+									rapi.rpgBindBoneIndexBufferOfs(idxBuff, noesis.RPGEODATA_USHORT, 16, 0, 8)
+								elif fullBonesOffs:
+									for v in range(numVerts):
+										bs.seek(start + vertElemHeaders[weightIndex][1] * v)
+										for w in range(8):
+											idxList.append(bs.readUByte()+fullRemapOffs)
+									idxBuff = struct.pack("<" + 'H'*len(idxList), *idxList)
+									rapi.rpgBindBoneIndexBufferOfs(idxBuff, noesis.RPGEODATA_USHORT, 16, 0, 8)
+								else:
+									rapi.rpgBindBoneIndexBufferOfs(vertexBuffer, noesis.RPGEODATA_UBYTE, vertElemHeaders[weightIndex][1], vertElemHeaders[weightIndex][2] + (vertElemHeaders[weightIndex][1] * vertsBefore), 8)
+								rapi.rpgBindBoneWeightBufferOfs(vertexBuffer, noesis.RPGEODATA_UBYTE, vertElemHeaders[weightIndex][1], vertElemHeaders[weightIndex][2] + (vertElemHeaders[weightIndex][1] * vertsBefore) + 8, 8)
 							
-						if colorIndex != -1 and bColorsEnabled:
-							offs = vertElemHeaders[colorIndex][2] + (vertElemHeaders[colorIndex][1] * vertsBefore)
-							if offs + numVerts*4 < len(vertexBuffer):
-								rapi.rpgBindColorBufferOfs(vertexBuffer, noesis.RPGEODATA_UBYTE, vertElemHeaders[colorIndex][1], offs, 4)
+						if colorIndex != -1 and colorIndex < len(curVEH) and bColorsEnabled:
+							offs = curVEH[colorIndex][2] + (curVEH[colorIndex][1] * vertsBefore)
+							if offs + numVerts*4 <= len(curVertBuf):
+								rapi.rpgBindColorBufferOfs(curVertBuf, noesis.RPGEODATA_UBYTE, curVEH[colorIndex][1], offs, 4)
 							else:
-								print("WARNING:", meshName, "Color buffer would have been read out of bounds by provided indices", "\n	Buffer Size:", len(vertexBuffer), "\n	Required Size:", offs + numVerts*4)
+								print("WARNING:", meshName, "Color buffer would have been read out of bounds by provided indices", "\n	Buffer Size:", len(curVertBuf), "\n	Required Size:", offs + numVerts*4)
 							
 						if numFaces > 0:
 							faceSize = 4 if intFaces == 1 else 2
-							bs.seek(faceBuffOffs + (facesBefore * faceSize))
-							indexBuffer = bs.readBytes(numFaces * faceSize)
+							if isStreaming and curFaceBuf is not None:
+								fStart = facesBefore * faceSize
+								indexBuffer = curFaceBuf[fStart:fStart + numFaces * faceSize]
+							else:
+								bs.seek(faceBuffOffs + (facesBefore * faceSize))
+								indexBuffer = bs.readBytes(numFaces * faceSize)
 							if bRenderAsPoints:
 								rapi.rpgCommitTriangles(None, noesis.RPGEODATA_USHORT if faceSize == 2 else noesis.RPGEODATA_UINT, (meshVertexInfo[j][4] - (vertsBefore)), noesis.RPGEO_POINTS, 0x1)
 							else:
@@ -4431,8 +5029,17 @@ def meshWriteModel(mdl, bs):
 	elif ext.find(".230612127") != -1:
 		sGameName = "AJ_AAT"
 		isMeshVer3 = True
-	elif ext.find(".231011879") != -1:
+	elif ext.find(".240423143") != -1 or ext.find(".231011879") != -1:
 		sGameName = "DD2"
+		isMeshVer3 = True
+	elif ext.find(".241111606") != -1 or ext.find(".240820143") != -1:
+		sGameName = "MHWs"
+		isMeshVer3 = True
+	elif ext.find(".250604100") != -1:
+		sGameName = "MHS3"
+		isMeshVer3 = True
+	elif ext.find(".250925211") != -1 or ext.find(".251121828") != -1:
+		sGameName = "Pragmata"
 		isMeshVer3 = True
 	elif ext.find(".240424828") != -1:
 		sGameName = "DRDR"
@@ -4495,8 +5102,7 @@ def meshWriteModel(mdl, bs):
 	extension = os.path.splitext(rapi.getInputName())[1]
 	vertElemCount = 3 
 	
-	if sGameName == "AJ_AAT" or sGameName == "DD2" or sGameName == "DRDR":
-		#namesOffsLocation = 136 if bDoSkin else 144
+	if sGameName in ("AJ_AAT", "DD2", "DRDR", "MHWs", "MHS3", "RE9", "Pragmata"):
 		isDD2Mesh = True
 
 	#check if exporting bones and create skin bone map if so:
@@ -4504,7 +5110,7 @@ def meshWriteModel(mdl, bs):
 		vertElemCount += 1
 		bonesList = []
 		newSkinBoneMap = []
-		maxBones = 1024 if sGameName == "SF6" else 256
+		maxBones = 1024 if sGameName in ("SF6", "MHWs", "MHS3", "Pragmata", "RE9") else 256
 		
 		if (bReWrite or bWriteBones) and dialogOptions.doCreateBoneMap:
 			generateBoneMap(mdl)
@@ -4577,7 +5183,7 @@ def meshWriteModel(mdl, bs):
 		
 		#header
 		f.seek(numNodesLocation)
-		numNodes = f.readUInt()
+		numNodes = f.readUShort() if formats[sGameName]["meshVersion"] >= 4 else f.readUInt()
 		f.seek(LOD1OffsetLocation)
 		LOD1Offs = f.readUInt64()
 		f.seek(vBuffHdrOffsLocation)  
@@ -4687,9 +5293,9 @@ def meshWriteModel(mdl, bs):
 		
 		if isMeshVer3:
 			f.seek(232)
-			if sGameName == "AJ_AAT" or sGameName == "DD2" or sGameName == "DRDR":
-				f.seek(f.readUInt64())
-		elif sGameName == "RERT" or sGameName == "ReVerse" or sGameName == "MHRise" or sGameName == "RE8":
+		if sGameName in ("AJ_AAT", "DD2", "DRDR", "MHWs", "MHS3", "RE9", "Pragmata"):
+			f.seek(f.readUInt64())
+		elif sGameName == "RERT" or sGameName == "ReVerse" or sGameName == "MHRise" or sGameName == "RE8" or sGameName == "MHS3":
 			f.seek(192)
 		else:
 			f.seek(200)
@@ -4817,7 +5423,7 @@ def meshWriteModel(mdl, bs):
 		
 		#print(newMainMeshes)
 		
-		LOD1Offs = 176 if (sGameName == "DD2" or sGameName == "AJ_AAT" or sGameName == "DRDR") else 168 if isMeshVer3 else 128 if (sGameName == "RERT" or sGameName == "RE8" or sGameName == "MHRise") else 136
+		LOD1Offs = 176 if sGameName in ("DD2", "AJ_AAT", "DRDR", "MHWs", "MHS3", "RE9", "Pragmata") else 168 if isMeshVer3 else 128 if sGameName in ("RERT", "RE8", "MHRise") else 136
 		
 		#header:
 		bs.writeUInt(1213416781) #MESH
@@ -4828,7 +5434,7 @@ def meshWriteModel(mdl, bs):
 		
 		if isMeshVer3:
 			bs.writeUByte(3) #flag
-			if sGameName == "DD2" or sGameName == "AJ_AAT" or sGameName == "DRDR":
+			if sGameName in ("DD2", "AJ_AAT", "DRDR", "MHWs", "MHS3", "RE9", "Pragmata"):
 				bs.writeUByte(130) #solvedOffset
 				bs.writeUShort(84) #uknSF6
 			else:
@@ -4853,7 +5459,7 @@ def meshWriteModel(mdl, bs):
 			bs.writeUInt64(0) #namesOffs
 			bs.writeUInt64(0) #verticesOffset
 			bs.writeUInt64(0) #ukn4/padding
-			if sGameName == "DD2":
+			if sGameName in ("DD2", "MHWs", "MHS3", "RE9", "Pragmata"):
 				bs.writeUInt64(0) #ukn5/padding
 			
 		else:
@@ -4925,12 +5531,12 @@ def meshWriteModel(mdl, bs):
 			for j, submesh in enumerate(mm[0]):
 				#print ("New mainmesh GroupID", mm[len(mm)-1], "submesh", j)
 				bs.writeUInt(submesh[0])
-				if sGameName == "DRDR":
+				if sGameName == "DRDR" or formats[sGameName]["meshVersion"] >= 4:
 					bs.writeUInt(0)
 				bs.writeUInt(submesh[1])
 				bs.writeUInt(submesh[2])
 				bs.writeUInt(submesh[3])
-				if sGameName == "DRDR":
+				if sGameName == "DRDR" or formats[sGameName]["meshVersion"] >= 4:
 					bs.writeUInt(0)
 				if sGameName != "RE7" and sGameName != "RE2" and sGameName != "RE3" and sGameName != "DMC5":
 					bs.writeUInt64(0)
@@ -5265,15 +5871,17 @@ def meshWriteModel(mdl, bs):
 				bs.writeHalfFloat(vcmp[0])
 				bs.writeHalfFloat(vcmp[1])
 
+	bUsePacked6Idx = sGameName in ("SF6", "MHWs", "MHS3", "Pragmata")
+
 	def writeBoneID(bID, i):
-		if sGameName == "SF6":
+		if bUsePacked6Idx:
 			if i==3:
 				bs.writeBits(0, 2)
 			bs.writeBits(bID, 10)
 		else:
 			bs.writeUByte(bID)
 	
-	boneIdMax = 6 if sGameName == "SF6" else 8
+	boneIdMax = 6 if bUsePacked6Idx else 8
 	bnWeightStart = bs.tell()
 	
 	if bDoSkin:
