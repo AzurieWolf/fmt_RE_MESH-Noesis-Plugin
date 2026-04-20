@@ -1,7 +1,7 @@
 #RE Engine [PC] - ".mesh" plugin for Rich Whitehouse's Noesis
 #Authors: alphaZomega, AzurieWolf
 #Special thanks: Chrrox, SilverEzredes, Enaium 
-Version = "v3.30 (April 20, 2026)"
+Version = "v3.31 (April 20, 2026)"
 
 #Changelog:
 #- Addded support for Pragmata
@@ -691,6 +691,36 @@ def maybeDecompressGDeflate(rawBytes):
 	except Exception as err:
 		print("Fatal Error: Failed to decompress GDeflate texture data:", err)
 		return None
+
+def validateAndRebaseIndexBuffer(indexBuffer, faceSize, indexCount, vertsBefore, numVerts, meshName=""):
+	expectedSize = indexCount * faceSize
+	if expectedSize <= 0 or len(indexBuffer) < expectedSize:
+		print("WARNING:", meshName, "index buffer shorter than expected.", "Expected:", expectedSize, "Actual:", len(indexBuffer))
+		return None, 0
+	indexBuffer = indexBuffer[:expectedSize]
+	fmt = "H" if faceSize == 2 else "I"
+	try:
+		indices = list(struct.unpack("<" + fmt * indexCount, indexBuffer))
+	except:
+		print("WARNING:", meshName, "failed to unpack index buffer.")
+		return None, 0
+	if not indices:
+		return None, 0
+	validCount = len(indices) - (len(indices) % 3)
+	if validCount != len(indices):
+		print("WARNING:", meshName, "index count", len(indices), "is not divisible by 3, trimming to", validCount)
+		indices = indices[:validCount]
+		indexBuffer = struct.pack("<" + fmt * len(indices), *indices)
+	minIndex = min(indices)
+	maxIndex = max(indices)
+	if minIndex >= 0 and maxIndex < numVerts:
+		return indexBuffer, len(indices)
+	if minIndex >= vertsBefore and maxIndex < vertsBefore + numVerts:
+		rebased = [idx - vertsBefore for idx in indices]
+		print("Rebased indices for", meshName, "by", vertsBefore, "to fit local vertex window.")
+		return struct.pack("<" + fmt * len(rebased), *rebased), len(rebased)
+	print("WARNING:", meshName, "index range out of bounds.", "Min:", minIndex, "Max:", maxIndex, "VertsBefore:", vertsBefore, "NumVerts:", numVerts)
+	return None, 0
 
 def sort_human(List):
 	convert = lambda text: float(text) if text.isdigit() else text
@@ -4810,11 +4840,19 @@ class meshFile(object):
 							else:
 								bs.seek(faceBuffOffs + (facesBefore * faceSize))
 								indexBuffer = bs.readBytes(numFaces * faceSize)
+							indexBuffer, safeIndexCount = validateAndRebaseIndexBuffer(indexBuffer, faceSize, numFaces, vertsBefore, numVerts, meshName)
+							if indexBuffer is None or safeIndexCount <= 0:
+								rapi.rpgClearBufferBinds()
+								continue
 							if bRenderAsPoints:
 								rapi.rpgCommitTriangles(None, noesis.RPGEODATA_USHORT if faceSize == 2 else noesis.RPGEODATA_UINT, (meshVertexInfo[j][4] - (vertsBefore)), noesis.RPGEO_POINTS, 0x1)
 							else:
 								#rapi.rpgSetStripEnder(0x10000)
-								rapi.rpgCommitTriangles(indexBuffer, noesis.RPGEODATA_USHORT if faceSize == 2 else noesis.RPGEODATA_UINT, numFaces, noesis.RPGEO_TRIANGLE, 0x1)
+								try:
+									rapi.rpgCommitTriangles(indexBuffer, noesis.RPGEODATA_USHORT if faceSize == 2 else noesis.RPGEODATA_UINT, safeIndexCount, noesis.RPGEO_TRIANGLE, 0x1)
+								except RuntimeError as err:
+									print("WARNING: Failed to submit triangles for", meshName, "-", err)
+									print("  faceSize:", faceSize, "safeIndexCount:", safeIndexCount, "vertsBefore:", vertsBefore, "numVerts:", numVerts, "facesBefore:", facesBefore)
 								rapi.rpgClearBufferBinds()
 					
 					numVertsLOD += meshVertexInfo[j][4]
