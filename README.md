@@ -1,18 +1,27 @@
 # fmt_RE_MESH-Noesis-Plugin
 A plugin for Rich Whitehouse's Noesis to import and export RE Engine meshes, textures and animations
 
-## SUPPORTED GAMES
-- Resident Evil 2 Remake
-- Resident Evil 3 Remake
-- Resident Evil 4 Remake
-- Resident Evil 7 (Ray Tracing)
-- Resident Evil 8
-- Devil May Cry 5
-- Monster Hunter Rise
-- Street Fighter 6
-- ExoPrimal
-- Apollo Justice: Ace Attorney Trilogy
-- Dragon's Dogma 2
+## 🎮 SUPPORTED GAMES
+
+| Game | Model | Texture | Animation |
+|------|:----:|:----:|:----:|
+| Resident Evil 7 | ✅ | ✅ | ✅ |
+| Resident Evil 2 Remake | ✅ | ✅ | ✅ |
+| Resident Evil 3 Remake | ✅ | ✅ | ✅ |
+| Resident Evil 4 Remake | ✅ | ✅ | ✅ |
+| Resident Evil 8 (Village) | ✅ | ✅ | ✅ |
+| Resident Evil 9 | ✅ | ✅ | ✅ |
+| Resident Evil ReVerse | ✅ | ✅ | ✅ |
+| Devil May Cry 5 | ✅ | ✅ | ✅ |
+| Monster Hunter Rise / Sunbreak | ✅ | ✅ | ✅ |
+| Monster Hunter Wilds | ✅ | ✅ | ✅ |
+| Monster Hunter Stories 3 | ✅ | ✅ | ✅ |
+| Street Fighter 6 | ✅ | ✅ | ✅ |
+| Dragon's Dogma 2 | ✅ | ✅ | ✅ |
+| Dead Rising Deluxe Remaster | ✅ | ✅ | ✅ |
+| ExoPrimal | ✅ | ✅ | ✅ |
+| Apollo Justice: Ace Attorney Trilogy | ✅ | ✅ | ✅ |
+| Pragmata | ✅ | ✅ | ✅ |
 
 
 ## INSTALLATION:
