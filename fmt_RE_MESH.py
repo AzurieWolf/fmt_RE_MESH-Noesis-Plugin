@@ -3555,7 +3555,7 @@ class meshFile(object):
 		elif meshVersion == 250904410:  # RE9
 			isMeshVer3 = True
 			sGameName = "RE9"
-		elif (meshVersion == 250707828 or self.path.find(".250925211") != -1):  # Pragmata
+		elif (meshVersion == 250707828 or self.path.find(".250707828") != -1):  # Pragmata
 			isMeshVer3 = True
 			sGameName = "Pragmata"
 		
@@ -3574,6 +3574,63 @@ class meshFile(object):
 		mmtrExt = formats[sGameName]["mmtrExt"]
 		nDir = formats[sGameName]["nDir"]
 		mdfExt = formats[sGameName]["mdfExt"]
+
+		def probeMdfFile(path):
+			try:
+				if not path or not rapi.checkFileExists(path):
+					return None
+				data = rapi.loadIntoByteArray(path)
+				if not data or len(data) < 16:
+					return None
+				tmp = NoeBitStream(data)
+				magic = tmp.readUInt()
+				headerVersion = tmp.readUShort()
+				materialCount = tmp.readUShort()
+				if magic != 4605005:
+					return None
+				if headerVersion < 0 or headerVersion > 255:
+					return None
+				if materialCount < 0 or materialCount > 4096:
+					return None
+				extParts = os.path.basename(path).split(".")
+				if len(extParts) < 3 or not extParts[-1].isdigit():
+					return None
+				versionExact = int(extParts[-1])
+				return {"path": path, "version": versionExact, "count": materialCount}
+			except:
+				return None
+
+		def findBestMdfCandidate(basePath, requiredExt=None):
+			searchDir = os.path.dirname(basePath)
+			if not os.path.isdir(searchDir):
+				return None
+			baseName = os.path.basename(basePath).lower()
+			best = None
+			bestScore = -1
+			for item in os.listdir(searchDir):
+				lowerItem = item.lower()
+				if ".mdf2." not in lowerItem:
+					continue
+				if requiredExt and not lowerItem.endswith(requiredExt.lower()):
+					continue
+				fullPath = os.path.join(searchDir, item)
+				info = probeMdfFile(fullPath)
+				if not info:
+					continue
+				score = 0
+				if info["count"] == matCount:
+					score += 10000
+				commonPrefix = 0
+				for idx, ch in enumerate(lowerItem):
+					if idx < len(baseName) and ch == baseName[idx]:
+						commonPrefix += 1
+					else:
+						break
+				score += commonPrefix
+				if best is None or score > bestScore:
+					best = info
+					bestScore = score
+			return best
 					
 		if extractedNativesPath != "":
 			print ("Using this extracted natives path:", extractedNativesPath + "\n")
@@ -3639,6 +3696,12 @@ class meshFile(object):
 				materialFileName = (pathPrefix + "_mat" + mdfExt)
 			if not (rapi.checkFileExists(materialFileName)):
 				materialFileName = (pathPrefix + "_00" + mdfExt)
+
+		probedMdf = probeMdfFile(materialFileName)
+		if not probedMdf:
+			bestMdf = findBestMdfCandidate(pathPrefix, mdfExt)
+			if bestMdf:
+				materialFileName = bestMdf["path"]
 				
 		if not (rapi.checkFileExists(materialFileName)):
 			materialFileName = noesis.userPrompt(noesis.NOEUSERVAL_FILEPATH, "MDF File Not Found", "Manually enter the name of the MDF file or cancel.", os.path.join(os.path.dirname(inputName), rapi.getLocalFileName(materialFileName)) , None)
@@ -3681,7 +3744,14 @@ class meshFile(object):
 		if (noMDFFound == 1) or not (rapi.checkFileExists(materialFileName)):
 			print("Failed to open material file.")
 			return False
-	
+
+		probedMdf = probeMdfFile(materialFileName)
+		if not probedMdf:
+			print("Failed to validate MDF file:", materialFileName)
+			return False
+		print("Using MDF:", materialFileName)
+		print("MDF header version:", probedMdf["version"], "material count:", probedMdf["count"])
+
 		texBaseColour = []
 		texRoughColour = []
 		texSpecColour = []
@@ -3694,6 +3764,7 @@ class meshFile(object):
 		fileSize = bs.getSize()
 		#Magic, Unknown, MaterialCount, Unknown, Unknown
 		matHeader = [bs.readUInt(), bs.readUShort(), bs.readUShort(), bs.readUInt(), bs.readUInt()]
+		mdfVersionExact = int(os.path.basename(materialFileName).split(".")[-1]) if os.path.basename(materialFileName).split(".")[-1].isdigit() else 0
 		matCountMDF = matHeader[2]
 		
 		if matCountMDF != matCount and len(self.fullMatList) == 0:
@@ -3706,20 +3777,16 @@ class meshFile(object):
 		def isValidMdfOffset(offset):
 			return isinstance(offset, int) and offset >= 0 and offset < fileSize
 		
-		newFloatHeaderGames = ("MHWs", "MHS3", "RE9", "Pragmata")
-		floatHeaderSize = 0x20 if sGameName in newFloatHeaderGames else 0x18
+		materialEntrySize = 108 if mdfVersionExact >= 51 else 100 if mdfVersionExact >= 31 else 80 if mdfVersionExact >= 19 else 64
+		floatHeaderSize = 0x18
+		texHeaderSize = 0x20 if mdfVersionExact >= 13 else 0x18
 		maxReasonableParams = 4096
 		maxReasonableTextures = 4096
 		
 		#Parse Materials
 		for i in range(matCountMDF):
 			
-			if self.mdfVer > 3:
-				bs.seek(0x10 + (i * 100))
-			elif self.mdfVer > 2:
-				bs.seek(0x10 + (i * 80))
-			else:
-				bs.seek(0x10 + (i * 64))
+			bs.seek(0x10 + (i * materialEntrySize))
 			
 			materialNamesOffset = bs.readUInt64()
 			materialHash = bs.readInt()
@@ -3727,28 +3794,35 @@ class meshFile(object):
 			floatCount = bs.readUInt()
 			texCount = bs.readUInt()
 			
-			if self.mdfVer >= 3:
-				bs.seek(8,1)
-				
+			gpbfBufferNameCount = 0
+			gpbfBufferPathCount = 0
+			bakeTextureArraySize = 0
+			if mdfVersionExact >= 19:
+				gpbfBufferNameCount = bs.readUInt()
+				gpbfBufferPathCount = bs.readUInt()
+			if mdfVersionExact >= 31:
+				bakeTextureArraySize = bs.readUInt()
 			shaderType = bs.readUInt()
-			if self.mdfVer >= 4:
-				uknSF6int = bs.readUInt()
-				
 			alphaFlag = bs.readUInt()
-			
-			if self.mdfVer >= 4:
-				uknSF6int2 = bs.readUInt()
-				uknSF6int3 = bs.readUInt()
-				
+			flagsB = 0
+			shaderLODNum = 0
+			if mdfVersionExact >= 31:
+				flagsB = bs.readUInt()
+				shaderLODNum = bs.readUInt()
+			ver51UnknOffset = 0
+			if mdfVersionExact >= 51:
+				ver51UnknOffset = bs.readUInt64()
 			floatHdrOffs = bs.readUInt64()
 			texHdrOffs = bs.readUInt64()
-			if self.mdfVer >= 3:
-				firstMtrlNameOffs = bs.readUInt64()
+			gpuBufferOffs = 0
+			if mdfVersionExact >= 19:
+				gpuBufferOffs = bs.readUInt64()
 			floatStartOffs = bs.readUInt64()
 			mmtr_PathOffs = bs.readUInt64()
 			
-			if self.mdfVer >= 4:
-				uknSF6offset = bs.readUInt64()
+			mmtrsDataOffset = 0
+			if mdfVersionExact >= 31:
+				mmtrsDataOffset = bs.readUInt64()
 				
 			if not isValidMdfOffset(materialNamesOffset) or not isValidMdfOffset(mmtr_PathOffs):
 				print("WARNING: Skipping material", i, "due to invalid MDF string offsets.")
@@ -3757,7 +3831,6 @@ class meshFile(object):
 				print("WARNING: Skipping material", i, "due to invalid MDF table offsets.")
 				continue
 			maxFloatCount = max(0, (fileSize - floatHdrOffs) // floatHeaderSize)
-			texHeaderSize = 0x20 if self.mdfVer >= 2 else 0x18
 			maxTexCount = max(0, (fileSize - texHdrOffs) // texHeaderSize)
 			if floatCount > min(maxFloatCount, maxReasonableParams):
 				print("WARNING: Skipping material", i, "due to implausible float parameter count:", floatCount)
@@ -3813,7 +3886,17 @@ class meshFile(object):
 					print("WARNING: Skipping invalid material parameter table entry", j, "for material", materialName)
 					continue
 				bs.seek(floatHeaderOffset)
-				paramInfo.append([bs.readUInt64(), bs.readUInt64(), bs.readUInt(), bs.readUInt()]) #dscrptnOffs[0], type[1], strctOffs[2], numFloats[3] 
+				paramNameOffs = bs.readUInt64()
+				paramUtf16Hash = bs.readUInt()
+				paramUtf8Hash = bs.readUInt()
+				if mdfVersionExact >= 13:
+					paramDataRelOffs = bs.readInt()
+					paramFloatCount = bs.readUShort()
+					paramFlags = bs.readUShort()
+				else:
+					paramFloatCount = bs.readUInt()
+					paramDataRelOffs = bs.readInt()
+				paramInfo.append([paramNameOffs, paramDataRelOffs, paramFloatCount, paramFlags if mdfVersionExact >= 13 else 0])
 				if not isValidMdfOffset(paramInfo[j][0]):
 					print("WARNING: Skipping invalid material parameter header", j, "for material", materialName)
 					continue
@@ -3821,18 +3904,8 @@ class meshFile(object):
 				paramType = ReadUnicodeString(bs)
 				
 				colours = None
-				if self.mdfVer >= 2: #sGameName == "RERT" or sGameName == "RE3" or sGameName == "ReVerse" or sGameName == "RE8" or sGameName == "MHRise" or sGameName == "SF6":
-					paramDataOffs = floatStartOffs + paramInfo[j][2]
-					if not isValidMdfOffset(paramDataOffs):
-						print("WARNING: Skipping invalid material parameter data", paramType, "for material", materialName)
-						continue
-					bs.seek(paramDataOffs)
-					if paramInfo[j][3] == 4:
-						colours = NoeVec4((bs.readFloat(), bs.readFloat(), bs.readFloat(), bs.readFloat()))
-					elif paramInfo[j][3] == 1:
-						colours = bs.readFloat()
-				else:
-					paramDataOffs = floatStartOffs + paramInfo[j][3]
+				if mdfVersionExact >= 13:
+					paramDataOffs = floatStartOffs + paramInfo[j][1]
 					if not isValidMdfOffset(paramDataOffs):
 						print("WARNING: Skipping invalid material parameter data", paramType, "for material", materialName)
 						continue
@@ -3840,6 +3913,16 @@ class meshFile(object):
 					if paramInfo[j][2] == 4:
 						colours = NoeVec4((bs.readFloat(), bs.readFloat(), bs.readFloat(), bs.readFloat()))
 					elif paramInfo[j][2] == 1:
+						colours = bs.readFloat()
+				else:
+					paramDataOffs = floatStartOffs + paramInfo[j][2]
+					if not isValidMdfOffset(paramDataOffs):
+						print("WARNING: Skipping invalid material parameter data", paramType, "for material", materialName)
+						continue
+					bs.seek(paramDataOffs)
+					if paramInfo[j][1] == 4:
+						colours = NoeVec4((bs.readFloat(), bs.readFloat(), bs.readFloat(), bs.readFloat()))
+					elif paramInfo[j][1] == 1:
 						colours = bs.readFloat()
 					
 				if doPrintMDF:
@@ -3890,20 +3973,20 @@ class meshFile(object):
 			
 			for j in range(texCount): # texture headers
 				
-				if self.mdfVer >= 2:
+				if mdfVersionExact >= 13:
 					bs.seek(texHdrOffs + (j * 0x20))
-					textureInfo.append([bs.readUInt64(), bs.readUInt64(), bs.readUInt64(), bs.readUInt64()]) #TextureTypeOffset[0], uknBytes[1], TexturePathOffset[2], padding[3]
-					if self.mdfVer >= 4:
-						bs.seek(8,1)
+					textureInfo.append([bs.readUInt64(), bs.readUInt(), bs.readUInt(), bs.readUInt64()]) #typeOffset, utf16hash, utf8hash, pathOffset
+					bs.seek(8,1)
 				else:
 					bs.seek(texHdrOffs + (j * 0x18))
 					textureInfo.append([bs.readUInt64(), bs.readUInt64(), bs.readUInt64()])
-				if not isValidMdfOffset(textureInfo[j][0]) or not isValidMdfOffset(textureInfo[j][2]):
+				texturePathOffset = textureInfo[j][3] if mdfVersionExact >= 13 else textureInfo[j][2]
+				if not isValidMdfOffset(textureInfo[j][0]) or not isValidMdfOffset(texturePathOffset):
 					print("WARNING: Skipping invalid texture header", j, "for material", materialName)
 					continue
 				bs.seek(textureInfo[j][0])
 				textureType = ReadUnicodeString(bs)
-				bs.seek(textureInfo[j][2])
+				bs.seek(texturePathOffset)
 				textureName = ReadUnicodeString(bs).replace("@", "")
 				lastTextureName = textureName
 				
