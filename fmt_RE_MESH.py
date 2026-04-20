@@ -1,7 +1,7 @@
 #RE Engine [PC] - ".mesh" plugin for Rich Whitehouse's Noesis
 #Authors: alphaZomega, AzurieWolf
 #Special thanks: Chrrox, SilverEzredes, Enaium 
-Version = "v3.31 (April 20, 2026)"
+Version = "v3.32 (April 20, 2026)"
 
 #Changelog:
 #- Addded support for Pragmata
@@ -1771,9 +1771,14 @@ class openOptionsDialogImportWindow:
 			self.localIdx = self.localBox.getSelectionIndex()
 			restOfPath = dialogOptions.currentDir.replace(self.localRoot, "").replace(self.baseDir, "").replace(formats[sGameName]["nDir"]+"\\", "")
 			if self.localBox.getStringForIndex(self.localIdx) == "Base Directory":
-				dialogOptions.currentDir = self.baseDir
-				if restOfPath and os.path.isdir(self.baseDir + restOfPath):
-					dialogOptions.currentDir = self.baseDir + restOfPath
+				if self.baseDir and os.path.isdir(self.baseDir):
+					dialogOptions.currentDir = self.baseDir
+					if restOfPath and os.path.isdir(self.baseDir + restOfPath):
+						dialogOptions.currentDir = self.baseDir + restOfPath
+				else:
+					dialogOptions.currentDir = self.localRoot
+					self.localBox.selectString("Local Folder")
+					self.localIdx = self.localBox.getSelectionIndex()
 			else:
 				dialogOptions.currentDir = os.path.dirname(self.path)
 				if restOfPath and os.path.isdir(self.localRoot + restOfPath):
@@ -1855,6 +1860,8 @@ class openOptionsDialogImportWindow:
 		self.loadList.selectString((self.pak and self.pak.path) or rapi.getInputName())
 		
 	def setPakList(self):
+		if not dialogOptions.currentDir or not os.path.isdir(dialogOptions.currentDir):
+			dialogOptions.currentDir = self.localRoot if self.localRoot and os.path.isdir(self.localRoot) else os.path.dirname(self.path)
 		for name in self.allFiles:
 			self.pakList.removeString(name)
 		self.allFiles = [".."]
