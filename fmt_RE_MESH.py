@@ -1,7 +1,7 @@
 #RE Engine [PC] - ".mesh" plugin for Rich Whitehouse's Noesis
 #Authors: alphaZomega, AzurieWolf
 #Special thanks: Chrrox, SilverEzredes, Enaium 
-Version = "v3.34 (April 20, 2026)"
+Version = "v3.35 (April 22, 2026)"
 
 #Changelog:
 #- Addded support for Pragmata
@@ -1377,6 +1377,7 @@ def texWriteRGBA(data, width, height, bs):
 	reVerseSize = 0
 	
 	version = convertTexVersion(version)
+	isGDeflateTex = version in GDEFLATE_TEX_VERSIONS
 	
 	f.seek(14)
 	if version  > 27:
@@ -1476,6 +1477,9 @@ def texWriteRGBA(data, width, height, bs):
 	if not bDoEncode and mipSize < int((os.path.getsize(rapi.getInputName())) / 4):
 		print ("Unexpected source image size\nEncoding image...")
 		bDoEncode = True
+	if isGDeflateTex and not bDoEncode:
+		print ("Newer TEX layout requires a mip data table.\nEncoding image...")
+		bDoEncode = True
 		
 	if not bDoEncode: 
 		print ("Copying image data from \"" + rapi.getLocalFileName(rapi.getInputName()) + "\"")
@@ -1552,6 +1556,12 @@ def texWriteRGBA(data, width, height, bs):
 				print ("Mip", numMips, ": ", mipWidth, "x", mipHeight, "\n            ", pitch, "\n            ", mipSize)
 				if mipWidth > 4: mipWidth = int(mipWidth / 2)
 				if mipHeight > 4: mipHeight = int(mipHeight / 2)
+			if isGDeflateTex and numImages == 1:
+				relativeOffset = 0
+				for dxtData in fileData:
+					bs.writeUInt(len(dxtData))
+					bs.writeUInt(relativeOffset)
+					relativeOffset += len(dxtData)
 		
 		if numImages > 1: #multi image images seek to their image data and encode at the same size 
 			if exportCycles > 1:
@@ -1592,6 +1602,8 @@ def texWriteRGBA(data, width, height, bs):
 				bs.writeUByte(numMips)
 			
 			bsHeaderSize = output_mips * 16 + 32 + reVerseSize
+			if isGDeflateTex:
+				bsHeaderSize += output_mips * 8
 			bs.seek(32 + reVerseSize)
 			
 			for mip in range(numMips):
